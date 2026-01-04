@@ -8,6 +8,8 @@ st.set_page_config(
     layout="wide",
 )
 
+st.image("assets/banner.jpeg", use_container_width=True)
+
 st.title("🏥 Pj FAER: Hospital Flow Simulation")
 
 st.markdown("""

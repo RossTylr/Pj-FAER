@@ -1,4 +1,10 @@
+<p align="center">
+  <img src="assets/banner.jpeg" alt="Pj FAER Banner" width="100%">
+</p>
+
 # Pj FAER - Flow Analysis for Emergency Response
+
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://pj-faer.streamlit.app)
 
 A discrete-event simulation platform for hospital patient flow, built with SimPy and Streamlit.
 
