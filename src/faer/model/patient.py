@@ -1,0 +1,1 @@
+"""Patient entity definition."""
