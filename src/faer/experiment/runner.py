@@ -1,13 +1,14 @@
 """Single and batch simulation runners."""
 
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any, Union
 
-from faer.core.scenario import Scenario
+from faer.core.scenario import Scenario, FullScenario
 from faer.model.processes import run_simulation
+from faer.model.full_model import run_full_simulation
 
 
 def multiple_replications(
-    scenario: Scenario,
+    scenario: Union[Scenario, FullScenario],
     n_reps: int = 30,
     metric_names: Optional[List[str]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
@@ -18,18 +19,30 @@ def multiple_replications(
     to ensure independent samples.
 
     Args:
-        scenario: Base scenario configuration.
+        scenario: Base scenario configuration (Scenario or FullScenario).
         n_reps: Number of replications to run.
         metric_names: List of metric names to collect. If None, collects
-            p_delay, mean_queue_time, and utilisation.
+            defaults based on scenario type.
         progress_callback: Optional callback(current_rep, total_reps) for
             progress reporting.
 
     Returns:
         Dictionary mapping metric names to lists of values across replications.
     """
+    is_full_model = isinstance(scenario, FullScenario)
+
     if metric_names is None:
-        metric_names = ["p_delay", "mean_queue_time", "utilisation"]
+        if is_full_model:
+            metric_names = [
+                "arrivals", "departures",
+                "arrivals_resus", "arrivals_majors", "arrivals_minors",
+                "p_delay", "mean_triage_wait", "mean_treatment_wait",
+                "mean_system_time", "p95_system_time",
+                "admission_rate", "admitted", "discharged",
+                "util_triage", "util_resus", "util_majors", "util_minors",
+            ]
+        else:
+            metric_names = ["p_delay", "mean_queue_time", "utilisation"]
 
     results: Dict[str, List[float]] = {name: [] for name in metric_names}
 
@@ -37,8 +50,11 @@ def multiple_replications(
         # Create scenario with different seed for this rep
         rep_scenario = scenario.clone_with_seed(scenario.random_seed + rep)
 
-        # Run simulation
-        run_results = run_simulation(rep_scenario)
+        # Run appropriate simulation
+        if is_full_model:
+            run_results = run_full_simulation(rep_scenario)
+        else:
+            run_results = run_simulation(rep_scenario)
 
         # Collect specified metrics
         for name in metric_names:

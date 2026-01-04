@@ -1,9 +1,10 @@
-"""Run simulation page."""
+"""Run simulation page for full A&E model."""
 
 import time
 import streamlit as st
+import numpy as np
 
-from faer.core.scenario import Scenario
+from faer.core.scenario import FullScenario
 from faer.experiment.runner import multiple_replications
 
 st.set_page_config(page_title="Run - FAER", page_icon="▶️", layout="wide")
@@ -21,19 +22,38 @@ n_reps = st.session_state.get("n_reps", 30)
 
 # Scenario summary
 st.header("Current Scenario")
+
+# First row - timing and resources
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.metric("Duration", f"{scenario.run_length / 60:.0f} hours")
+    st.metric("Duration", f"{scenario.run_length / 60:.0f}h")
+    st.metric("Warm-up", f"{scenario.warm_up / 60:.0f}h")
 
 with col2:
+    st.metric("Triage Nurses", scenario.n_triage)
     st.metric("Resus Bays", scenario.n_resus_bays)
 
 with col3:
-    st.metric("Mean LoS", f"{scenario.resus_mean:.0f} min")
+    st.metric("Majors Bays", scenario.n_majors_bays)
+    st.metric("Minors Bays", scenario.n_minors_bays)
 
 with col4:
     st.metric("Replications", n_reps)
+    st.metric("Random Seed", scenario.random_seed)
+
+# Second row - acuity mix
+st.subheader("Acuity Mix")
+acuity_cols = st.columns(3)
+
+with acuity_cols[0]:
+    st.metric("Resus", f"{scenario.p_resus:.0%}")
+
+with acuity_cols[1]:
+    st.metric("Majors", f"{scenario.p_majors:.0%}")
+
+with acuity_cols[2]:
+    st.metric("Minors", f"{scenario.p_minors:.0%}")
 
 st.divider()
 
@@ -41,7 +61,6 @@ st.divider()
 if st.button("🚀 Run Experiment", type="primary", use_container_width=True):
     progress_bar = st.progress(0)
     status_text = st.empty()
-    metrics_placeholder = st.empty()
 
     start_time = time.time()
 
@@ -49,18 +68,10 @@ if st.button("🚀 Run Experiment", type="primary", use_container_width=True):
         progress_bar.progress(current / total)
         status_text.text(f"Running replication {current}/{total}...")
 
-    # Run replications
+    # Run replications with full model metrics
     results = multiple_replications(
         scenario,
         n_reps=n_reps,
-        metric_names=[
-            "arrivals",
-            "departures",
-            "p_delay",
-            "mean_queue_time",
-            "mean_system_time",
-            "utilisation",
-        ],
         progress_callback=progress_callback,
     )
 
@@ -79,21 +90,37 @@ if st.button("🚀 Run Experiment", type="primary", use_container_width=True):
 
     # Show quick summary
     st.header("Quick Summary")
-    import numpy as np
 
-    summary_cols = st.columns(3)
+    # Row 1: Key metrics
+    summary_cols = st.columns(4)
 
     with summary_cols[0]:
-        p_delay_mean = np.mean(results["p_delay"])
-        st.metric("Mean P(Delay)", f"{p_delay_mean:.1%}")
+        st.metric("Mean Arrivals", f"{np.mean(results['arrivals']):.0f}")
 
     with summary_cols[1]:
-        queue_mean = np.mean(results["mean_queue_time"])
-        st.metric("Mean Queue Time", f"{queue_mean:.1f} min")
+        st.metric("Mean System Time", f"{np.mean(results['mean_system_time']):.1f} min")
 
     with summary_cols[2]:
-        util_mean = np.mean(results["utilisation"])
-        st.metric("Mean Utilisation", f"{util_mean:.1%}")
+        st.metric("P(Delay)", f"{np.mean(results['p_delay']):.1%}")
+
+    with summary_cols[3]:
+        st.metric("Admission Rate", f"{np.mean(results['admission_rate']):.1%}")
+
+    # Row 2: Utilisation
+    st.subheader("Resource Utilisation")
+    util_cols = st.columns(4)
+
+    with util_cols[0]:
+        st.metric("Triage", f"{np.mean(results['util_triage']):.1%}")
+
+    with util_cols[1]:
+        st.metric("Resus", f"{np.mean(results['util_resus']):.1%}")
+
+    with util_cols[2]:
+        st.metric("Majors", f"{np.mean(results['util_majors']):.1%}")
+
+    with util_cols[3]:
+        st.metric("Minors", f"{np.mean(results['util_minors']):.1%}")
 
     st.info("📈 Go to **Results** page for detailed analysis with confidence intervals.")
 
@@ -102,16 +129,35 @@ elif st.session_state.get("run_complete"):
     st.info(f"✅ Previous run completed in {st.session_state.get('run_time', 0):.1f}s. "
             "Click **Run Experiment** to re-run, or view **Results**.")
 
-    import numpy as np
-
     results = st.session_state.results
-    summary_cols = st.columns(3)
+
+    # Row 1: Key metrics
+    summary_cols = st.columns(4)
 
     with summary_cols[0]:
-        st.metric("Mean P(Delay)", f"{np.mean(results['p_delay']):.1%}")
+        st.metric("Mean Arrivals", f"{np.mean(results['arrivals']):.0f}")
 
     with summary_cols[1]:
-        st.metric("Mean Queue Time", f"{np.mean(results['mean_queue_time']):.1f} min")
+        st.metric("Mean System Time", f"{np.mean(results['mean_system_time']):.1f} min")
 
     with summary_cols[2]:
-        st.metric("Mean Utilisation", f"{np.mean(results['utilisation']):.1%}")
+        st.metric("P(Delay)", f"{np.mean(results['p_delay']):.1%}")
+
+    with summary_cols[3]:
+        st.metric("Admission Rate", f"{np.mean(results['admission_rate']):.1%}")
+
+    # Row 2: Utilisation
+    st.subheader("Resource Utilisation")
+    util_cols = st.columns(4)
+
+    with util_cols[0]:
+        st.metric("Triage", f"{np.mean(results['util_triage']):.1%}")
+
+    with util_cols[1]:
+        st.metric("Resus", f"{np.mean(results['util_resus']):.1%}")
+
+    with util_cols[2]:
+        st.metric("Majors", f"{np.mean(results['util_majors']):.1%}")
+
+    with util_cols[3]:
+        st.metric("Minors", f"{np.mean(results['util_minors']):.1%}")

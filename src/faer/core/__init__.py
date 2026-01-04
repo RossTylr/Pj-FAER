@@ -1,6 +1,6 @@
 """Core foundation layer: scenario configuration, arrivals, distributions."""
 
-from faer.core.scenario import Scenario
+from faer.core.scenario import Scenario, FullScenario
 from faer.core.arrivals import (
     ArrivalProfile,
     NSPPThinning,
@@ -10,6 +10,7 @@ from faer.core.arrivals import (
 
 __all__ = [
     "Scenario",
+    "FullScenario",
     "ArrivalProfile",
     "NSPPThinning",
     "load_default_profile",
