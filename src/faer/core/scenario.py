@@ -1,9 +1,53 @@
 """Scenario configuration dataclass."""
 
-from dataclasses import dataclass
-from typing import Optional
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Optional, List
 
 import numpy as np
+
+from faer.core.entities import NodeType, Priority, ArrivalMode
+
+
+@dataclass
+class RoutingRule:
+    """Single routing probability rule.
+
+    Defines the probability of transitioning from one node to another
+    for patients of a specific priority level.
+    """
+    from_node: NodeType
+    to_node: NodeType
+    priority: Priority
+    probability: float
+
+
+@dataclass
+class ArrivalConfig:
+    """Configuration for a single arrival stream.
+
+    Each stream has its own hourly arrival rates and triage priority mix.
+    """
+    mode: ArrivalMode
+    hourly_rates: List[float]  # 24 values, one per hour
+    triage_mix: dict  # Dict[Priority, float] - must sum to 1.0
+
+    def __post_init__(self):
+        if len(self.hourly_rates) != 24:
+            raise ValueError("hourly_rates must have 24 values")
+        total = sum(self.triage_mix.values())
+        if abs(total - 1.0) > 0.001:
+            raise ValueError(f"triage_mix must sum to 1.0, got {total}")
+
+
+@dataclass
+class NodeConfig:
+    """Configuration for a service node."""
+    node_type: NodeType
+    capacity: int
+    service_time_mean: float  # minutes
+    service_time_cv: float = 0.5
+    enabled: bool = True
 
 
 @dataclass
@@ -160,12 +204,22 @@ class FullScenario:
     random_seed: int = 42
 
     # RNG streams (created in __post_init__)
-    rng_arrivals: Optional[np.random.Generator] = None
+    rng_arrivals: Optional[dict] = None  # Dict[ArrivalMode, Generator]
     rng_acuity: Optional[np.random.Generator] = None
     rng_triage: Optional[np.random.Generator] = None
     rng_treatment: Optional[np.random.Generator] = None
     rng_boarding: Optional[np.random.Generator] = None
     rng_disposition: Optional[np.random.Generator] = None
+    rng_routing: Optional[np.random.Generator] = None
+
+    # Routing configuration (created in __post_init__ if not provided)
+    routing: List[RoutingRule] = field(default_factory=list)
+
+    # Arrival stream configurations (created in __post_init__ if not provided)
+    arrival_configs: List[ArrivalConfig] = field(default_factory=list)
+
+    # Node configurations (created in __post_init__ if not provided)
+    node_configs: dict = field(default_factory=dict)  # Dict[NodeType, NodeConfig]
 
     def __post_init__(self) -> None:
         """Initialize separate RNG streams and validate parameters."""
@@ -174,13 +228,160 @@ class FullScenario:
         if abs(total - 1.0) > 0.001:
             raise ValueError(f"Acuity proportions must sum to 1.0, got {total}")
 
-        # Create separate RNG streams
-        self.rng_arrivals = np.random.default_rng(self.random_seed)
-        self.rng_acuity = np.random.default_rng(self.random_seed + 1)
-        self.rng_triage = np.random.default_rng(self.random_seed + 2)
-        self.rng_treatment = np.random.default_rng(self.random_seed + 3)
-        self.rng_boarding = np.random.default_rng(self.random_seed + 4)
-        self.rng_disposition = np.random.default_rng(self.random_seed + 5)
+        # Create separate RNG streams per arrival mode
+        self.rng_arrivals = {
+            mode: np.random.default_rng(self.random_seed + i)
+            for i, mode in enumerate(ArrivalMode)
+        }
+        self.rng_acuity = np.random.default_rng(self.random_seed + 10)
+        self.rng_triage = np.random.default_rng(self.random_seed + 11)
+        self.rng_treatment = np.random.default_rng(self.random_seed + 12)
+        self.rng_boarding = np.random.default_rng(self.random_seed + 13)
+        self.rng_disposition = np.random.default_rng(self.random_seed + 14)
+        self.rng_routing = np.random.default_rng(self.random_seed + 15)
+
+        # Initialize default routing if not provided
+        if not self.routing:
+            self.routing = self._default_routing()
+        self._validate_routing()
+
+        # Initialize default arrival configs if not provided
+        if not self.arrival_configs:
+            self.arrival_configs = self._default_arrival_configs()
+
+        # Initialize default node configs if not provided
+        if not self.node_configs:
+            self.node_configs = self._default_node_configs()
+
+    def _default_node_configs(self) -> dict:
+        """Default node configurations."""
+        return {
+            NodeType.RESUS: NodeConfig(NodeType.RESUS, capacity=3, service_time_mean=60),
+            NodeType.MAJORS: NodeConfig(NodeType.MAJORS, capacity=12, service_time_mean=45),
+            NodeType.MINORS: NodeConfig(NodeType.MINORS, capacity=8, service_time_mean=30),
+            NodeType.SURGERY: NodeConfig(NodeType.SURGERY, capacity=2, service_time_mean=150),
+            NodeType.ITU: NodeConfig(NodeType.ITU, capacity=6, service_time_mean=720),
+            NodeType.WARD: NodeConfig(NodeType.WARD, capacity=30, service_time_mean=480),
+        }
+
+    def _default_routing(self) -> List[RoutingRule]:
+        """Default ED disposition routing."""
+        rules = []
+
+        # P1 from Resus: Surgery 30%, ITU 40%, Ward 20%, Exit 10%
+        rules.extend([
+            RoutingRule(NodeType.RESUS, NodeType.SURGERY, Priority.P1_IMMEDIATE, 0.30),
+            RoutingRule(NodeType.RESUS, NodeType.ITU, Priority.P1_IMMEDIATE, 0.40),
+            RoutingRule(NodeType.RESUS, NodeType.WARD, Priority.P1_IMMEDIATE, 0.20),
+            RoutingRule(NodeType.RESUS, NodeType.EXIT, Priority.P1_IMMEDIATE, 0.10),
+        ])
+
+        # P2 from Resus/Majors: Surgery 15%, ITU 10%, Ward 45%, Exit 30%
+        for src in [NodeType.RESUS, NodeType.MAJORS]:
+            rules.extend([
+                RoutingRule(src, NodeType.SURGERY, Priority.P2_VERY_URGENT, 0.15),
+                RoutingRule(src, NodeType.ITU, Priority.P2_VERY_URGENT, 0.10),
+                RoutingRule(src, NodeType.WARD, Priority.P2_VERY_URGENT, 0.45),
+                RoutingRule(src, NodeType.EXIT, Priority.P2_VERY_URGENT, 0.30),
+            ])
+
+        # P3 from Majors: Ward 25%, Exit 75%
+        rules.extend([
+            RoutingRule(NodeType.MAJORS, NodeType.WARD, Priority.P3_URGENT, 0.25),
+            RoutingRule(NodeType.MAJORS, NodeType.EXIT, Priority.P3_URGENT, 0.75),
+        ])
+
+        # P3 from Minors: Ward 10%, Exit 90%
+        rules.extend([
+            RoutingRule(NodeType.MINORS, NodeType.WARD, Priority.P3_URGENT, 0.10),
+            RoutingRule(NodeType.MINORS, NodeType.EXIT, Priority.P3_URGENT, 0.90),
+        ])
+
+        # P4 from Minors: Ward 5%, Exit 95%
+        rules.extend([
+            RoutingRule(NodeType.MINORS, NodeType.WARD, Priority.P4_STANDARD, 0.05),
+            RoutingRule(NodeType.MINORS, NodeType.EXIT, Priority.P4_STANDARD, 0.95),
+        ])
+
+        # Downstream routing (same for all priorities)
+        for p in Priority:
+            # Surgery → ITU 40%, Ward 60%
+            rules.append(RoutingRule(NodeType.SURGERY, NodeType.ITU, p, 0.40))
+            rules.append(RoutingRule(NodeType.SURGERY, NodeType.WARD, p, 0.60))
+            # ITU → Ward 100%
+            rules.append(RoutingRule(NodeType.ITU, NodeType.WARD, p, 1.0))
+            # Ward → Exit 100%
+            rules.append(RoutingRule(NodeType.WARD, NodeType.EXIT, p, 1.0))
+
+        return rules
+
+    def _default_arrival_configs(self) -> List[ArrivalConfig]:
+        """Default arrival configurations for 3 streams."""
+        return [
+            # Ambulance: moderate volume, higher acuity
+            ArrivalConfig(
+                mode=ArrivalMode.AMBULANCE,
+                hourly_rates=[2, 1.5, 1, 1, 1.5, 2, 3, 4, 5, 5.5, 5, 4.5,
+                             4, 4, 4, 4.5, 5, 5.5, 5, 4, 3, 2.5, 2, 2],
+                triage_mix={
+                    Priority.P1_IMMEDIATE: 0.15,
+                    Priority.P2_VERY_URGENT: 0.40,
+                    Priority.P3_URGENT: 0.35,
+                    Priority.P4_STANDARD: 0.10,
+                }
+            ),
+            # Helicopter: low volume, high acuity
+            ArrivalConfig(
+                mode=ArrivalMode.HELICOPTER,
+                hourly_rates=[0.1] * 24,
+                triage_mix={
+                    Priority.P1_IMMEDIATE: 0.70,
+                    Priority.P2_VERY_URGENT: 0.25,
+                    Priority.P3_URGENT: 0.05,
+                    Priority.P4_STANDARD: 0.0,
+                }
+            ),
+            # Self-presentation (walk-in): high volume, low acuity
+            ArrivalConfig(
+                mode=ArrivalMode.SELF_PRESENTATION,
+                hourly_rates=[1, 0.5, 0.3, 0.2, 0.3, 0.5, 1, 2, 3, 4, 4.5, 4,
+                             3.5, 3, 3, 3.5, 4, 4.5, 4, 3, 2, 1.5, 1, 1],
+                triage_mix={
+                    Priority.P1_IMMEDIATE: 0.02,
+                    Priority.P2_VERY_URGENT: 0.15,
+                    Priority.P3_URGENT: 0.45,
+                    Priority.P4_STANDARD: 0.38,
+                }
+            ),
+        ]
+
+    def _validate_routing(self) -> None:
+        """Ensure routing probabilities sum to 1.0 for each source/priority."""
+        sums = defaultdict(float)
+        for rule in self.routing:
+            sums[(rule.from_node, rule.priority)] += rule.probability
+
+        for (node, priority), total in sums.items():
+            if abs(total - 1.0) > 0.001:
+                raise ValueError(
+                    f"Routing from {node.name} for {priority.name} "
+                    f"sums to {total:.3f}, expected 1.0"
+                )
+
+    def get_next_node(self, current_node: NodeType, priority: Priority) -> NodeType:
+        """Sample next node based on routing probabilities."""
+        applicable = [r for r in self.routing
+                     if r.from_node == current_node and r.priority == priority]
+
+        if not applicable:
+            return NodeType.EXIT  # Fallback
+
+        probs = [r.probability for r in applicable]
+        nodes = [r.to_node for r in applicable]
+
+        # Use scenario's routing RNG
+        idx = self.rng_routing.choice(len(nodes), p=probs)
+        return nodes[idx]
 
     @property
     def mean_iat(self) -> float:
