@@ -19,6 +19,7 @@ if "scenario" not in st.session_state:
 
 scenario = st.session_state.scenario
 n_reps = st.session_state.get("n_reps", 30)
+use_multistream = st.session_state.get("use_multistream", False)
 
 # Scenario summary
 st.header("Current Scenario")
@@ -41,6 +42,12 @@ with col3:
 with col4:
     st.metric("Replications", n_reps)
     st.metric("Random Seed", scenario.random_seed)
+
+# Arrival mode
+if use_multistream:
+    st.info("🚑 Multi-stream arrivals enabled (Ambulance, Helicopter, Walk-in)")
+else:
+    st.info(f"📊 Single-stream arrivals at {scenario.arrival_rate:.1f} patients/hour")
 
 # Second row - acuity mix
 st.subheader("Acuity Mix")
@@ -73,6 +80,7 @@ if st.button("🚀 Run Experiment", type="primary", use_container_width=True):
         scenario,
         n_reps=n_reps,
         progress_callback=progress_callback,
+        use_multistream=use_multistream,
     )
 
     elapsed = time.time() - start_time

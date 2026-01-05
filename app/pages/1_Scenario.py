@@ -19,8 +19,8 @@ if "n_reps" not in st.session_state:
 scenario = st.session_state.scenario
 
 # Tabs for different configuration sections
-tab_time, tab_resources, tab_acuity, tab_service, tab_experiment = st.tabs([
-    "Timing", "Resources", "Acuity Mix", "Service Times", "Experiment"
+tab_time, tab_resources, tab_acuity, tab_arrivals, tab_service, tab_experiment = st.tabs([
+    "Timing", "Resources", "Acuity Mix", "Arrivals", "Service Times", "Experiment"
 ])
 
 # ===== TIMING TAB =====
@@ -175,6 +175,18 @@ with tab_acuity:
                  color_discrete_map={"Resus": "#ff4b4b", "Majors": "#ffa62b", "Minors": "#29b09d"})
     st.plotly_chart(fig, use_container_width=True)
 
+    # Priority distribution info
+    st.subheader("Priority Levels")
+    st.markdown("""
+    Patients are assigned priority levels (P1-P4) based on acuity:
+    - **P1 (Immediate)**: All Resus patients
+    - **P2 (Very Urgent)**: 70% of Majors
+    - **P3 (Urgent)**: 30% of Majors, 60% of Minors
+    - **P4 (Standard)**: 40% of Minors
+
+    Lower priority numbers are served first when queuing.
+    """)
+
     # Disposition probabilities
     st.subheader("Admission Probabilities by Acuity")
     st.markdown("Probability a patient is admitted (vs discharged) after treatment:")
@@ -210,6 +222,79 @@ with tab_acuity:
             step=0.05,
             help="~5-15% typically admitted",
         )
+
+# ===== ARRIVALS TAB =====
+with tab_arrivals:
+    st.header("Arrival Configuration")
+
+    # Multi-stream toggle
+    use_multistream = st.toggle(
+        "Use multi-stream arrivals",
+        value=st.session_state.get("use_multistream", False),
+        help="Enable separate arrival streams for Ambulance, Helicopter, and Walk-in"
+    )
+    st.session_state.use_multistream = use_multistream
+
+    if use_multistream:
+        st.markdown("""
+        **Multi-stream arrivals enabled.** Patients arrive via three channels:
+
+        | Stream | Volume | Typical Acuity |
+        |--------|--------|----------------|
+        | 🚑 Ambulance | Moderate | Higher (P1/P2) |
+        | 🚁 Helicopter | Low | Critical (P1) |
+        | 🚶 Walk-in | High | Lower (P3/P4) |
+
+        Each stream has its own time-varying arrival pattern and priority mix.
+        """)
+
+        # Show default arrival patterns
+        st.subheader("Default Arrival Patterns (per hour)")
+
+        amb_rates = [2, 1.5, 1, 1, 1.5, 2, 3, 4, 5, 5.5, 5, 4.5,
+                    4, 4, 4, 4.5, 5, 5.5, 5, 4, 3, 2.5, 2, 2]
+        heli_rates = [0.1] * 24
+        walk_rates = [1, 0.5, 0.3, 0.2, 0.3, 0.5, 1, 2, 3, 4, 4.5, 4,
+                     3.5, 3, 3, 3.5, 4, 4.5, 4, 3, 2, 1.5, 1, 1]
+
+        arrival_df = pd.DataFrame({
+            "Hour": list(range(24)),
+            "Ambulance": amb_rates,
+            "Helicopter": heli_rates,
+            "Walk-in": walk_rates,
+        }).set_index("Hour")
+
+        st.line_chart(arrival_df)
+
+    else:
+        st.markdown("""
+        **Single-stream arrivals** (legacy mode).
+        All patients arrive via a single Poisson process with the configured arrival rate.
+        """)
+
+        arrival_rate = st.slider(
+            "Arrival rate (patients/hour)",
+            min_value=1.0,
+            max_value=20.0,
+            value=scenario.arrival_rate,
+            step=0.5,
+            help="Average number of patients arriving per hour",
+        )
+        st.session_state.arrival_rate = arrival_rate
+
+    # Routing information
+    st.subheader("Patient Routing")
+    st.markdown("""
+    After ED treatment, patients are routed based on priority:
+
+    | From | P1 Routing | P2/P3/P4 Routing |
+    |------|------------|------------------|
+    | Resus | Surgery 30%, ITU 40%, Ward 20%, Exit 10% | Ward 45%, Exit 30%, Surgery 15%, ITU 10% |
+    | Majors | - | Ward 25-45%, Exit 30-75% |
+    | Minors | - | Ward 5-10%, Exit 90-95% |
+
+    Downstream nodes: Surgery → ITU/Ward, ITU → Ward, Ward → Exit
+    """)
 
 # ===== SERVICE TIMES TAB =====
 with tab_service:

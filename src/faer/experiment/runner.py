@@ -12,6 +12,7 @@ def multiple_replications(
     n_reps: int = 30,
     metric_names: Optional[List[str]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    use_multistream: bool = False,
 ) -> Dict[str, List[float]]:
     """Run multiple replications and collect specified metrics.
 
@@ -25,6 +26,7 @@ def multiple_replications(
             defaults based on scenario type.
         progress_callback: Optional callback(current_rep, total_reps) for
             progress reporting.
+        use_multistream: If True, use multi-stream arrivals for FullScenario.
 
     Returns:
         Dictionary mapping metric names to lists of values across replications.
@@ -52,7 +54,7 @@ def multiple_replications(
 
         # Run appropriate simulation
         if is_full_model:
-            run_results = run_full_simulation(rep_scenario)
+            run_results = run_full_simulation(rep_scenario, use_multistream=use_multistream)
         else:
             run_results = run_simulation(rep_scenario)
 

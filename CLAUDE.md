@@ -25,40 +25,58 @@ pj_faer/
 │   └── faer/
 │       ├── __init__.py
 │       ├── core/               # Foundation layer
-│       │   ├── scenario.py     # Scenario dataclass with parameters + seeds
+│       │   ├── entities.py     # Core enums: Priority, NodeType, ArrivalMode
+│       │   ├── scenario.py     # Scenario/FullScenario, RoutingRule, NodeConfig
 │       │   ├── arrivals.py     # NSPP thinning arrival generator
 │       │   └── distributions.py
 │       ├── model/              # SimPy model layer
-│       │   ├── patient.py      # Patient entity
-│       │   ├── resources.py    # Resource definitions
-│       │   └── processes.py    # SimPy process logic
+│       │   ├── patient.py      # Patient entity with priority, mode, current_node
+│       │   ├── full_model.py   # Full A&E simulation with priority queuing
+│       │   └── processes.py    # Basic SimPy process logic
 │       ├── results/            # Metrics layer
 │       │   ├── collector.py    # Event logging
 │       │   └── metrics.py      # KPI computation
 │       └── experiment/         # Experimentation layer
-│           ├── runner.py       # Single/batch runs
+│           ├── runner.py       # Single/batch runs with multistream support
 │           └── analysis.py     # CI, precision guidance
 ├── app/                        # Streamlit UI
 │   ├── Home.py
 │   └── pages/
+│       ├── 1_Scenario.py       # Config with arrivals tab
+│       ├── 2_Run.py            # Run with multistream toggle
+│       └── 3_Results.py        # Results display
 ├── tests/
+│   ├── test_priority_queuing.py
+│   ├── test_routing.py
+│   ├── test_multistream_arrivals.py
+│   ├── test_downstream_nodes.py
+│   ├── test_blocking.py
+│   └── ...
 └── data/
     └── arrival_profiles/
 ```
 
-## Current Phase: 0 (Scaffolding)
+## Current Phase: 4 (System Realism)
 
-We are building incrementally. Current objective: create project skeleton with working dependencies.
+We are building incrementally. Phase 4 adds realistic hospital flow mechanics.
 
 ### Phase Progression
 
-- **Phase 0**: Scaffolding - Empty but runnable project
-- **Phase 1**: Stationary Mechanics - One queue, one server, constant arrivals
-- **Phase 2**: NSPP + Metrics - Time-varying arrivals, P(delay), utilisation, CIs
-- **Phase 3**: Streamlit MVP - Interactive web app
-- **Phase 4**: System Realism - Full A&E pathway, holding states
+- **Phase 0**: Scaffolding - Empty but runnable project ✅
+- **Phase 1**: Stationary Mechanics - One queue, one server, constant arrivals ✅
+- **Phase 2**: NSPP + Metrics - Time-varying arrivals, P(delay), utilisation, CIs ✅
+- **Phase 3**: Streamlit MVP - Interactive web app ✅
+- **Phase 4**: System Realism - Full A&E pathway, holding states ✅ (Current)
 - **Phase 5**: Scenario Science - Sensitivity analysis, comparison
 - **Phase 6**: Full FAER - Complete hospital flow platform
+
+### Phase 4 Features
+
+1. **Priority Queuing (P1-P4)**: Triage priority levels with `PriorityResource`
+2. **Routing Matrix**: Configurable patient flow between nodes
+3. **Multi-Stream Arrivals**: Ambulance, Helicopter, Walk-in with different acuity mixes
+4. **Downstream Nodes**: Surgery, ITU, Ward resources beyond ED
+5. **Blocking/Boarding Metrics**: Track patients waiting for downstream beds
 
 ## Code Style & Conventions
 

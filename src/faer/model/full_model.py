@@ -9,11 +9,13 @@ For admitted patients: boarding wait after treatment.
 
 from dataclasses import dataclass, field
 from typing import Dict, Generator, List, Any, Optional
+import itertools
 
 import numpy as np
 import simpy
 
-from faer.core.scenario import FullScenario
+from faer.core.scenario import FullScenario, ArrivalConfig
+from faer.core.entities import ArrivalMode, Priority
 from faer.model.patient import Patient, Acuity, Disposition
 
 
@@ -28,12 +30,16 @@ def sample_lognormal(rng: np.random.Generator, mean: float, cv: float) -> float:
 
 @dataclass
 class AEResources:
-    """Container for A&E resources."""
+    """Container for A&E resources.
 
-    triage: simpy.Resource
-    resus: simpy.Resource
-    majors: simpy.Resource
-    minors: simpy.Resource
+    Uses PriorityResource to enable priority-based queuing where
+    lower priority values (P1) are served before higher values (P4).
+    """
+
+    triage: simpy.PriorityResource
+    resus: simpy.PriorityResource
+    majors: simpy.PriorityResource
+    minors: simpy.PriorityResource
 
 
 @dataclass
@@ -59,8 +65,11 @@ class FullResultsCollector:
     # Resource logs for utilisation: {resource_name: [(time, count), ...]}
     resource_logs: Dict[str, List[tuple]] = field(default_factory=dict)
 
+    # Boarding events: [(patient_id, from_node, duration), ...]
+    boarding_events: List[tuple] = field(default_factory=list)
+
     def __post_init__(self):
-        for resource in ["triage", "resus", "majors", "minors"]:
+        for resource in ["triage", "resus", "majors", "minors", "surgery", "itu", "ward"]:
             self.resource_logs[resource] = [(0.0, 0)]
 
     def record_arrival(self, patient: Patient) -> None:
@@ -90,6 +99,11 @@ class FullResultsCollector:
     def record_resource_state(self, resource_name: str, time: float, count: int) -> None:
         """Record resource utilisation state change."""
         self.resource_logs[resource_name].append((time, count))
+
+    def record_boarding(self, patient_id: int, from_node: str, duration: float) -> None:
+        """Record a boarding event."""
+        if duration > 0:
+            self.boarding_events.append((patient_id, from_node, duration))
 
     def compute_metrics(self, run_length: float, scenario: FullScenario) -> Dict:
         """Compute all KPIs from collected data."""
@@ -156,6 +170,19 @@ class FullResultsCollector:
             "minors_mean_wait": float(np.mean([p.treatment_wait for p in minors_patients])) if minors_patients else 0.0,
         }
 
+        # Boarding metrics
+        if self.boarding_events:
+            boarding_times = [e[2] for e in self.boarding_events]
+            metrics["mean_boarding_time"] = float(np.mean(boarding_times))
+            metrics["max_boarding_time"] = float(np.max(boarding_times))
+            metrics["total_boarding_events"] = len(self.boarding_events)
+            metrics["p_boarding"] = len(self.boarding_events) / total_arrivals if total_arrivals > 0 else 0.0
+        else:
+            metrics["mean_boarding_time"] = 0.0
+            metrics["max_boarding_time"] = 0.0
+            metrics["total_boarding_events"] = 0
+            metrics["p_boarding"] = 0.0
+
         return metrics
 
     def _compute_utilisation(self, resource: str, run_length: float, capacity: int, warm_up: float) -> float:
@@ -197,6 +224,8 @@ class FullResultsCollector:
             "admission_rate": 0.0, "discharged": 0, "admitted": 0,
             "util_triage": 0.0, "util_resus": 0.0, "util_majors": 0.0, "util_minors": 0.0,
             "resus_mean_wait": 0.0, "majors_mean_wait": 0.0, "minors_mean_wait": 0.0,
+            "mean_boarding_time": 0.0, "max_boarding_time": 0.0,
+            "total_boarding_events": 0, "p_boarding": 0.0,
         }
 
 
@@ -209,6 +238,21 @@ def assign_acuity(scenario: FullScenario) -> Acuity:
         return Acuity.MAJORS
     else:
         return Acuity.MINORS
+
+
+def assign_priority(acuity: Acuity, rng: np.random.Generator) -> Priority:
+    """Assign priority based on acuity with some variability.
+
+    Resus patients are always P1 (immediate).
+    Majors patients are P2 (70%) or P3 (30%).
+    Minors patients are P3 (60%) or P4 (40%).
+    """
+    if acuity == Acuity.RESUS:
+        return Priority.P1_IMMEDIATE
+    elif acuity == Acuity.MAJORS:
+        return Priority.P2_VERY_URGENT if rng.random() < 0.7 else Priority.P3_URGENT
+    else:  # MINORS
+        return Priority.P3_URGENT if rng.random() < 0.6 else Priority.P4_STANDARD
 
 
 def determine_disposition(patient: Patient, scenario: FullScenario) -> Disposition:
@@ -233,7 +277,7 @@ def triage_process(
     results: FullResultsCollector,
 ) -> Generator[simpy.Event, None, None]:
     """Triage process for non-Resus patients."""
-    with resources.triage.request() as req:
+    with resources.triage.request(priority=patient.priority.value) as req:
         yield req
 
         triage_start = env.now
@@ -267,7 +311,7 @@ def treatment_process(
         resource = resources.minors
         resource_name = "minors"
 
-    with resource.request() as req:
+    with resource.request(priority=patient.priority.value) as req:
         yield req
 
         treatment_start = env.now
@@ -328,34 +372,97 @@ def patient_journey(
     results.record_departure(patient)
 
 
-def arrival_generator(
+def arrival_generator_single(
     env: simpy.Environment,
     resources: AEResources,
     scenario: FullScenario,
     results: FullResultsCollector,
+    patient_counter: itertools.count,
 ) -> Generator[simpy.Event, None, None]:
-    """Generate patient arrivals."""
-    patient_id = 0
+    """Generate patient arrivals (single stream, legacy mode)."""
+    # Use first arrival mode's RNG for backwards compatibility
+    rng = scenario.rng_arrivals[ArrivalMode.AMBULANCE]
 
     while True:
         # Exponential inter-arrival time
-        iat = scenario.rng_arrivals.exponential(scenario.mean_iat)
+        iat = rng.exponential(scenario.mean_iat)
         yield env.timeout(iat)
 
-        # Create patient with assigned acuity
-        patient_id += 1
+        # Create patient with assigned acuity and priority
         acuity = assign_acuity(scenario)
-        patient = Patient(id=patient_id, arrival_time=env.now, acuity=acuity)
+        priority = assign_priority(acuity, scenario.rng_acuity)
+        patient = Patient(
+            id=next(patient_counter),
+            arrival_time=env.now,
+            acuity=acuity,
+            priority=priority,
+            mode=ArrivalMode.AMBULANCE,
+        )
 
         # Start patient journey
         env.process(patient_journey(env, patient, resources, scenario, results))
 
 
-def run_full_simulation(scenario: FullScenario) -> Dict[str, Any]:
+def arrival_generator_multistream(
+    env: simpy.Environment,
+    resources: AEResources,
+    config: ArrivalConfig,
+    scenario: FullScenario,
+    results: FullResultsCollector,
+    patient_counter: itertools.count,
+) -> Generator[simpy.Event, None, None]:
+    """Generate patient arrivals for a single stream (multi-stream mode)."""
+    rng = scenario.rng_arrivals[config.mode]
+
+    while True:
+        # Get current hour for time-varying rate
+        current_hour = int(env.now / 60) % 24
+        rate = config.hourly_rates[current_hour]
+
+        if rate <= 0:
+            # No arrivals this hour, wait until next hour
+            yield env.timeout(60)
+            continue
+
+        # Exponential inter-arrival time based on hourly rate
+        mean_iat = 60.0 / rate  # minutes
+        iat = rng.exponential(mean_iat)
+        yield env.timeout(iat)
+
+        # Sample priority from triage mix
+        priorities = list(config.triage_mix.keys())
+        probs = list(config.triage_mix.values())
+        priority_idx = rng.choice(len(priorities), p=probs)
+        priority = priorities[priority_idx]
+
+        # Assign acuity based on priority
+        if priority == Priority.P1_IMMEDIATE:
+            acuity = Acuity.RESUS
+        elif priority in (Priority.P2_VERY_URGENT, Priority.P3_URGENT):
+            acuity = Acuity.MAJORS if rng.random() < 0.6 else Acuity.MINORS
+        else:
+            acuity = Acuity.MINORS
+
+        # Create patient
+        patient = Patient(
+            id=next(patient_counter),
+            arrival_time=env.now,
+            acuity=acuity,
+            priority=priority,
+            mode=config.mode,
+        )
+
+        results.record_arrival(patient)
+        env.process(patient_journey(env, patient, resources, scenario, results))
+
+
+def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -> Dict[str, Any]:
     """Execute full A&E simulation.
 
     Args:
         scenario: FullScenario configuration.
+        use_multistream: If True, use multi-stream arrivals from arrival_configs.
+                         If False, use single-stream based on arrival_rate.
 
     Returns:
         Dictionary containing simulation results and metrics.
@@ -363,19 +470,32 @@ def run_full_simulation(scenario: FullScenario) -> Dict[str, Any]:
     # Initialize environment
     env = simpy.Environment()
 
-    # Create resources
+    # Create resources (PriorityResource for priority-based queuing)
     resources = AEResources(
-        triage=simpy.Resource(env, capacity=scenario.n_triage),
-        resus=simpy.Resource(env, capacity=scenario.n_resus_bays),
-        majors=simpy.Resource(env, capacity=scenario.n_majors_bays),
-        minors=simpy.Resource(env, capacity=scenario.n_minors_bays),
+        triage=simpy.PriorityResource(env, capacity=scenario.n_triage),
+        resus=simpy.PriorityResource(env, capacity=scenario.n_resus_bays),
+        majors=simpy.PriorityResource(env, capacity=scenario.n_majors_bays),
+        minors=simpy.PriorityResource(env, capacity=scenario.n_minors_bays),
     )
 
     # Initialize results collector
     results = FullResultsCollector()
 
-    # Start arrival generator
-    env.process(arrival_generator(env, resources, scenario, results))
+    # Shared patient counter for unique IDs across all streams
+    patient_counter = itertools.count(1)
+
+    # Start arrival generator(s)
+    if use_multistream and scenario.arrival_configs:
+        # Multi-stream mode: start a generator for each arrival config
+        for config in scenario.arrival_configs:
+            env.process(arrival_generator_multistream(
+                env, resources, config, scenario, results, patient_counter
+            ))
+    else:
+        # Single-stream mode (legacy)
+        env.process(arrival_generator_single(
+            env, resources, scenario, results, patient_counter
+        ))
 
     # Run simulation
     total_time = scenario.warm_up + scenario.run_length

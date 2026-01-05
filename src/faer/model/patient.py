@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional, List
 
+# Re-export from entities to maintain backwards compatibility
+from faer.core.entities import Priority, NodeType, ArrivalMode
+
 
 class Acuity(Enum):
     """Patient acuity levels (Manchester Triage Scale inspired)."""
@@ -31,6 +34,7 @@ class Patient:
         id: Unique patient identifier.
         arrival_time: Simulation time of arrival.
         acuity: Patient acuity level (Resus/Majors/Minors).
+        priority: Triage priority (P1-P4, lower = more urgent).
         timestamps: Dictionary of event timestamps.
         disposition: Final outcome (set at departure).
     """
@@ -38,6 +42,9 @@ class Patient:
     id: int
     arrival_time: float
     acuity: Acuity
+    priority: Priority = Priority.P3_URGENT  # Default to P3
+    mode: ArrivalMode = ArrivalMode.AMBULANCE  # Default arrival mode
+    current_node: Optional[NodeType] = None  # Current location in hospital
 
     # Timestamps (filled during simulation)
     triage_start: Optional[float] = None
