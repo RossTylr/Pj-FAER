@@ -127,6 +127,9 @@ class FullScenario:
 
     Includes multiple acuity streams, triage, and disposition routing.
 
+    Phase 5: Simplified ED with single bay pool and priority queuing.
+    Priority (P1-P4) determines service order, not destination.
+
     Attributes:
         run_length: Simulation duration in minutes.
         warm_up: Warm-up period in minutes.
@@ -134,27 +137,18 @@ class FullScenario:
         random_seed: Master seed for reproducibility.
 
         Acuity mix (must sum to 1.0):
-        p_resus: Proportion of Resus patients.
-        p_majors: Proportion of Majors patients.
-        p_minors: Proportion of Minors patients.
+        p_resus: Proportion of Resus-level patients.
+        p_majors: Proportion of Majors-level patients.
+        p_minors: Proportion of Minors-level patients.
 
         Resources:
         n_triage: Number of triage nurses.
-        n_resus_bays: Number of Resus bays.
-        n_majors_bays: Number of Majors cubicles.
-        n_minors_bays: Number of Minors cubicles.
+        n_ed_bays: Number of ED bays (single pool with priority queuing).
 
         Service times (mean, cv) in minutes:
         triage_mean, triage_cv: Triage duration.
-        resus_mean, resus_cv: Resus treatment duration.
-        majors_mean, majors_cv: Majors treatment duration.
-        minors_mean, minors_cv: Minors treatment duration.
+        ed_service_mean, ed_service_cv: ED treatment duration.
         boarding_mean, boarding_cv: Boarding time for admits.
-
-        Disposition probabilities:
-        resus_p_admit: Probability Resus patient is admitted.
-        majors_p_admit: Probability Majors patient is admitted.
-        minors_p_admit: Probability Minors patient is admitted.
     """
 
     # Horizon settings
@@ -169,36 +163,42 @@ class FullScenario:
     p_majors: float = 0.55
     p_minors: float = 0.40
 
-    # Resources
+    # Resources - Phase 5 simplified ED
     n_triage: int = 2
-    n_resus_bays: int = 2
-    n_majors_bays: int = 10
-    n_minors_bays: int = 6
+    n_ed_bays: int = 20  # Single pool replaces resus/majors/minors
+
+    # Handover bays (Phase 5b)
+    n_handover_bays: int = 4
+    handover_time_mean: float = 15.0  # minutes
+    handover_time_cv: float = 0.3
+
+    # Fleet controls (Phase 5c)
+    n_ambulances: int = 10
+    n_helicopters: int = 2
+    ambulance_turnaround_mins: float = 45.0
+    helicopter_turnaround_mins: float = 90.0
+    litters_per_ambulance: int = 1  # Future: could be 2 for MCIs
+
+    # Demand scaling (Phase 5d)
+    demand_multiplier: float = 1.0  # Global scaling for all streams
+    ambulance_rate_multiplier: float = 1.0  # Per-stream scaling
+    helicopter_rate_multiplier: float = 1.0
+    walkin_rate_multiplier: float = 1.0
+
+    # Bed management (Phase 5e)
+    bed_turnaround_mins: float = 10.0  # Cleaning time after patient leaves
 
     # Service times - Triage
     triage_mean: float = 5.0
     triage_cv: float = 0.3
 
-    # Service times - Resus
-    resus_mean: float = 90.0
-    resus_cv: float = 0.6
-
-    # Service times - Majors
-    majors_mean: float = 120.0
-    majors_cv: float = 0.7
-
-    # Service times - Minors
-    minors_mean: float = 45.0
-    minors_cv: float = 0.5
+    # Service times - ED (unified, varies by priority in practice)
+    ed_service_mean: float = 60.0
+    ed_service_cv: float = 0.6
 
     # Boarding time (for admitted patients awaiting bed)
     boarding_mean: float = 120.0
     boarding_cv: float = 1.0
-
-    # Disposition probabilities
-    resus_p_admit: float = 0.85
-    majors_p_admit: float = 0.35
-    minors_p_admit: float = 0.05
 
     # Reproducibility
     random_seed: int = 42
@@ -211,6 +211,7 @@ class FullScenario:
     rng_boarding: Optional[np.random.Generator] = None
     rng_disposition: Optional[np.random.Generator] = None
     rng_routing: Optional[np.random.Generator] = None
+    rng_handover: Optional[np.random.Generator] = None  # Phase 5b
 
     # Routing configuration (created in __post_init__ if not provided)
     routing: List[RoutingRule] = field(default_factory=list)
@@ -239,6 +240,7 @@ class FullScenario:
         self.rng_boarding = np.random.default_rng(self.random_seed + 13)
         self.rng_disposition = np.random.default_rng(self.random_seed + 14)
         self.rng_routing = np.random.default_rng(self.random_seed + 15)
+        self.rng_handover = np.random.default_rng(self.random_seed + 16)  # Phase 5b
 
         # Initialize default routing if not provided
         if not self.routing:
@@ -254,53 +256,57 @@ class FullScenario:
             self.node_configs = self._default_node_configs()
 
     def _default_node_configs(self) -> dict:
-        """Default node configurations."""
+        """Default node configurations.
+
+        Phase 5: Single ED_BAYS pool with priority queuing.
+        """
         return {
-            NodeType.RESUS: NodeConfig(NodeType.RESUS, capacity=3, service_time_mean=60),
-            NodeType.MAJORS: NodeConfig(NodeType.MAJORS, capacity=12, service_time_mean=45),
-            NodeType.MINORS: NodeConfig(NodeType.MINORS, capacity=8, service_time_mean=30),
+            NodeType.TRIAGE: NodeConfig(NodeType.TRIAGE, capacity=self.n_triage, service_time_mean=self.triage_mean),
+            NodeType.ED_BAYS: NodeConfig(NodeType.ED_BAYS, capacity=self.n_ed_bays, service_time_mean=self.ed_service_mean),
             NodeType.SURGERY: NodeConfig(NodeType.SURGERY, capacity=2, service_time_mean=150),
             NodeType.ITU: NodeConfig(NodeType.ITU, capacity=6, service_time_mean=720),
             NodeType.WARD: NodeConfig(NodeType.WARD, capacity=30, service_time_mean=480),
         }
 
     def _default_routing(self) -> List[RoutingRule]:
-        """Default ED disposition routing."""
+        """Default ED disposition routing.
+
+        Phase 5: All patients go through single ED_BAYS pool.
+        Routing from ED_BAYS depends on priority level.
+        """
         rules = []
 
-        # P1 from Resus: Surgery 30%, ITU 40%, Ward 20%, Exit 10%
+        # ED_BAYS routing by priority (all routes from single ED pool)
+        # P1: Surgery 30%, ITU 40%, Ward 20%, Exit 10%
         rules.extend([
-            RoutingRule(NodeType.RESUS, NodeType.SURGERY, Priority.P1_IMMEDIATE, 0.30),
-            RoutingRule(NodeType.RESUS, NodeType.ITU, Priority.P1_IMMEDIATE, 0.40),
-            RoutingRule(NodeType.RESUS, NodeType.WARD, Priority.P1_IMMEDIATE, 0.20),
-            RoutingRule(NodeType.RESUS, NodeType.EXIT, Priority.P1_IMMEDIATE, 0.10),
+            RoutingRule(NodeType.ED_BAYS, NodeType.SURGERY, Priority.P1_IMMEDIATE, 0.30),
+            RoutingRule(NodeType.ED_BAYS, NodeType.ITU, Priority.P1_IMMEDIATE, 0.40),
+            RoutingRule(NodeType.ED_BAYS, NodeType.WARD, Priority.P1_IMMEDIATE, 0.20),
+            RoutingRule(NodeType.ED_BAYS, NodeType.EXIT, Priority.P1_IMMEDIATE, 0.10),
         ])
 
-        # P2 from Resus/Majors: Surgery 15%, ITU 10%, Ward 45%, Exit 30%
-        for src in [NodeType.RESUS, NodeType.MAJORS]:
-            rules.extend([
-                RoutingRule(src, NodeType.SURGERY, Priority.P2_VERY_URGENT, 0.15),
-                RoutingRule(src, NodeType.ITU, Priority.P2_VERY_URGENT, 0.10),
-                RoutingRule(src, NodeType.WARD, Priority.P2_VERY_URGENT, 0.45),
-                RoutingRule(src, NodeType.EXIT, Priority.P2_VERY_URGENT, 0.30),
-            ])
-
-        # P3 from Majors: Ward 25%, Exit 75%
+        # P2: Surgery 15%, ITU 10%, Ward 45%, Exit 30%
         rules.extend([
-            RoutingRule(NodeType.MAJORS, NodeType.WARD, Priority.P3_URGENT, 0.25),
-            RoutingRule(NodeType.MAJORS, NodeType.EXIT, Priority.P3_URGENT, 0.75),
+            RoutingRule(NodeType.ED_BAYS, NodeType.SURGERY, Priority.P2_VERY_URGENT, 0.15),
+            RoutingRule(NodeType.ED_BAYS, NodeType.ITU, Priority.P2_VERY_URGENT, 0.10),
+            RoutingRule(NodeType.ED_BAYS, NodeType.WARD, Priority.P2_VERY_URGENT, 0.45),
+            RoutingRule(NodeType.ED_BAYS, NodeType.EXIT, Priority.P2_VERY_URGENT, 0.30),
         ])
 
-        # P3 from Minors: Ward 10%, Exit 90%
+        # P3: Surgery 5%, ITU 2%, Ward 25%, Exit 68%
         rules.extend([
-            RoutingRule(NodeType.MINORS, NodeType.WARD, Priority.P3_URGENT, 0.10),
-            RoutingRule(NodeType.MINORS, NodeType.EXIT, Priority.P3_URGENT, 0.90),
+            RoutingRule(NodeType.ED_BAYS, NodeType.SURGERY, Priority.P3_URGENT, 0.05),
+            RoutingRule(NodeType.ED_BAYS, NodeType.ITU, Priority.P3_URGENT, 0.02),
+            RoutingRule(NodeType.ED_BAYS, NodeType.WARD, Priority.P3_URGENT, 0.25),
+            RoutingRule(NodeType.ED_BAYS, NodeType.EXIT, Priority.P3_URGENT, 0.68),
         ])
 
-        # P4 from Minors: Ward 5%, Exit 95%
+        # P4: Surgery 2%, ITU 0%, Ward 5%, Exit 93%
         rules.extend([
-            RoutingRule(NodeType.MINORS, NodeType.WARD, Priority.P4_STANDARD, 0.05),
-            RoutingRule(NodeType.MINORS, NodeType.EXIT, Priority.P4_STANDARD, 0.95),
+            RoutingRule(NodeType.ED_BAYS, NodeType.SURGERY, Priority.P4_STANDARD, 0.02),
+            RoutingRule(NodeType.ED_BAYS, NodeType.ITU, Priority.P4_STANDARD, 0.0),
+            RoutingRule(NodeType.ED_BAYS, NodeType.WARD, Priority.P4_STANDARD, 0.05),
+            RoutingRule(NodeType.ED_BAYS, NodeType.EXIT, Priority.P4_STANDARD, 0.93),
         ])
 
         # Downstream routing (same for all priorities)
@@ -388,37 +394,34 @@ class FullScenario:
         """Mean inter-arrival time in minutes."""
         return 60.0 / self.arrival_rate
 
-    def get_admission_prob(self, acuity: str) -> float:
-        """Get admission probability for an acuity level.
+    def get_treatment_params(self) -> tuple:
+        """Get ED treatment time parameters.
 
-        Args:
-            acuity: One of 'resus', 'majors', 'minors'.
-
-        Returns:
-            Probability of admission.
-        """
-        probs = {
-            "resus": self.resus_p_admit,
-            "majors": self.majors_p_admit,
-            "minors": self.minors_p_admit,
-        }
-        return probs.get(acuity.lower(), 0.0)
-
-    def get_treatment_params(self, acuity: str) -> tuple:
-        """Get treatment time parameters for an acuity level.
-
-        Args:
-            acuity: One of 'resus', 'majors', 'minors'.
+        Phase 5: Single ED pool uses unified service time parameters.
 
         Returns:
             Tuple of (mean, cv) for treatment time.
         """
-        params = {
-            "resus": (self.resus_mean, self.resus_cv),
-            "majors": (self.majors_mean, self.majors_cv),
-            "minors": (self.minors_mean, self.minors_cv),
-        }
-        return params.get(acuity.lower(), (60.0, 0.5))
+        return (self.ed_service_mean, self.ed_service_cv)
+
+    def get_rate_multiplier(self, mode: ArrivalMode) -> float:
+        """Get effective rate multiplier for an arrival mode.
+
+        Phase 5d: Combines global demand_multiplier with per-stream multiplier.
+
+        Args:
+            mode: The arrival mode.
+
+        Returns:
+            Combined multiplier for this mode's arrival rate.
+        """
+        stream_multiplier = {
+            ArrivalMode.AMBULANCE: self.ambulance_rate_multiplier,
+            ArrivalMode.HELICOPTER: self.helicopter_rate_multiplier,
+            ArrivalMode.SELF_PRESENTATION: self.walkin_rate_multiplier,
+        }.get(mode, 1.0)
+
+        return self.demand_multiplier * stream_multiplier
 
     def clone_with_seed(self, new_seed: int) -> "FullScenario":
         """Create a copy with a different seed."""
@@ -430,21 +433,25 @@ class FullScenario:
             p_majors=self.p_majors,
             p_minors=self.p_minors,
             n_triage=self.n_triage,
-            n_resus_bays=self.n_resus_bays,
-            n_majors_bays=self.n_majors_bays,
-            n_minors_bays=self.n_minors_bays,
+            n_ed_bays=self.n_ed_bays,
+            n_handover_bays=self.n_handover_bays,
+            handover_time_mean=self.handover_time_mean,
+            handover_time_cv=self.handover_time_cv,
+            n_ambulances=self.n_ambulances,
+            n_helicopters=self.n_helicopters,
+            ambulance_turnaround_mins=self.ambulance_turnaround_mins,
+            helicopter_turnaround_mins=self.helicopter_turnaround_mins,
+            litters_per_ambulance=self.litters_per_ambulance,
+            demand_multiplier=self.demand_multiplier,
+            ambulance_rate_multiplier=self.ambulance_rate_multiplier,
+            helicopter_rate_multiplier=self.helicopter_rate_multiplier,
+            walkin_rate_multiplier=self.walkin_rate_multiplier,
+            bed_turnaround_mins=self.bed_turnaround_mins,
             triage_mean=self.triage_mean,
             triage_cv=self.triage_cv,
-            resus_mean=self.resus_mean,
-            resus_cv=self.resus_cv,
-            majors_mean=self.majors_mean,
-            majors_cv=self.majors_cv,
-            minors_mean=self.minors_mean,
-            minors_cv=self.minors_cv,
+            ed_service_mean=self.ed_service_mean,
+            ed_service_cv=self.ed_service_cv,
             boarding_mean=self.boarding_mean,
             boarding_cv=self.boarding_cv,
-            resus_p_admit=self.resus_p_admit,
-            majors_p_admit=self.majors_p_admit,
-            minors_p_admit=self.minors_p_admit,
             random_seed=new_seed,
         )

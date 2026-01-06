@@ -1,4 +1,4 @@
-"""Tests for priority-based queuing (Phase 4)."""
+"""Tests for priority-based queuing (Phase 5 - single ED pool)."""
 
 import pytest
 import simpy
@@ -164,13 +164,12 @@ class TestHighAcuityPrioritized:
 
     def test_resus_has_shorter_wait_than_minors(self):
         """In constrained scenario, Resus (P1) waits less than Minors (P3/P4)."""
-        # Create constrained scenario where queuing is likely
+        # Create constrained scenario where queuing is likely (Phase 5: single pool)
         scenario = FullScenario(
             run_length=480.0,
             warm_up=60.0,
             arrival_rate=10.0,  # High arrival rate
-            n_majors_bays=3,    # Constrained capacity
-            n_minors_bays=2,
+            n_ed_bays=5,        # Constrained capacity
             random_seed=42,
         )
         results = run_full_simulation(scenario)

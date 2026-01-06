@@ -1,10 +1,19 @@
 """Scenario configuration page for full A&E model."""
 
+import sys
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 
+# Add app directory to path for component imports
+app_dir = Path(__file__).parent.parent
+if str(app_dir) not in sys.path:
+    sys.path.insert(0, str(app_dir))
+
 from faer.core.scenario import FullScenario
 from faer.core.arrivals import load_default_profile
+from components.schematic import build_simple_schematic
 
 st.set_page_config(page_title="Scenario - FAER", page_icon="📊", layout="wide")
 
@@ -74,6 +83,13 @@ with tab_time:
 with tab_resources:
     st.header("Resource Configuration")
 
+    st.markdown("""
+    **Phase 5: Simplified ED**
+    - Single ED bay pool with priority queuing (P1-P4)
+    - P1 patients are served before P4 patients
+    - All patients use the same physical bays
+    """)
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -86,50 +102,115 @@ with tab_resources:
             help="Number of triage assessment stations",
         )
 
-        st.subheader("Resus")
-        n_resus = st.slider(
-            "Resus bays",
-            min_value=1,
-            max_value=6,
-            value=scenario.n_resus_bays,
-            help="Critical care resuscitation bays",
-        )
-
     with col2:
-        st.subheader("Majors")
-        n_majors = st.slider(
-            "Majors bays",
-            min_value=2,
-            max_value=20,
-            value=scenario.n_majors_bays,
-            help="Treatment bays for serious conditions",
+        st.subheader("ED Bays")
+        n_ed_bays = st.slider(
+            "ED Bays (total)",
+            min_value=5,
+            max_value=50,
+            value=scenario.n_ed_bays,
+            help="Total treatment bays (single pool with priority queuing)",
         )
 
-        st.subheader("Minors")
-        n_minors = st.slider(
-            "Minors bays",
-            min_value=2,
-            max_value=15,
-            value=scenario.n_minors_bays,
-            help="Treatment bays for less urgent cases",
+    # Handover bays (Phase 5b)
+    st.subheader("Ambulance Handover")
+    st.markdown("""
+    Ambulance/helicopter arrivals use handover bays.
+    Handover bay is held until ED bay is acquired (feedback mechanism).
+    """)
+
+    ho_col1, ho_col2 = st.columns(2)
+    with ho_col1:
+        n_handover_bays = st.slider(
+            "Handover Bays",
+            min_value=1,
+            max_value=10,
+            value=scenario.n_handover_bays,
+            help="Number of ambulance handover bays",
+        )
+    with ho_col2:
+        handover_time_mean = st.number_input(
+            "Handover Time (min)",
+            min_value=5,
+            max_value=60,
+            value=int(scenario.handover_time_mean),
+            help="Mean handover time in minutes",
+        )
+
+    # Fleet controls (Phase 5c)
+    st.subheader("Fleet")
+    st.markdown("""
+    Ambulance/helicopter arrivals require available vehicles.
+    Vehicles are unavailable during turnaround after patient delivery.
+    """)
+
+    fleet_col1, fleet_col2 = st.columns(2)
+    with fleet_col1:
+        n_ambulances = st.number_input(
+            "Ambulances",
+            min_value=1,
+            max_value=50,
+            value=scenario.n_ambulances,
+            help="Number of ambulance vehicles",
+        )
+        ambulance_turnaround = st.number_input(
+            "Ambulance Turnaround (min)",
+            min_value=15,
+            max_value=120,
+            value=int(scenario.ambulance_turnaround_mins),
+            help="Time ambulance unavailable after delivery",
+        )
+    with fleet_col2:
+        n_helicopters = st.number_input(
+            "Helicopters",
+            min_value=0,
+            max_value=10,
+            value=scenario.n_helicopters,
+            help="Number of helicopter vehicles",
+        )
+        helicopter_turnaround = st.number_input(
+            "Helicopter Turnaround (min)",
+            min_value=30,
+            max_value=180,
+            value=int(scenario.helicopter_turnaround_mins),
+            help="Time helicopter unavailable after delivery",
         )
 
     # Visual summary
     st.subheader("Resource Summary")
     resource_df = pd.DataFrame({
-        "Resource": ["Triage", "Resus", "Majors", "Minors"],
-        "Capacity": [n_triage, n_resus, n_majors, n_minors],
+        "Resource": ["Triage", "ED Bays", "Handover Bays", "Ambulances", "Helicopters"],
+        "Capacity": [n_triage, n_ed_bays, n_handover_bays, n_ambulances, n_helicopters],
     })
     st.bar_chart(resource_df.set_index("Resource"), use_container_width=True)
+
+    # System schematic (Phase 5f)
+    st.subheader("System Schematic")
+    st.caption("Live diagram updates as you adjust capacities")
+    try:
+        schematic_dot = build_simple_schematic(
+            n_ambulances=n_ambulances,
+            n_helicopters=n_helicopters,
+            n_handover=n_handover_bays,
+            n_triage=n_triage,
+            n_ed_bays=n_ed_bays,
+        )
+        st.graphviz_chart(schematic_dot, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Could not render schematic: {e}")
 
 # ===== ACUITY MIX TAB =====
 with tab_acuity:
     st.header("Patient Acuity Mix")
     st.markdown("""
-    Configure the proportion of patients arriving in each acuity category:
-    - **Resus**: Life-threatening, immediate attention required
-    - **Majors**: Serious conditions requiring urgent treatment
-    - **Minors**: Less urgent, ambulatory patients
+    Configure the proportion of patients arriving in each clinical acuity category.
+    Acuity determines the **priority level (P1-P4)** used for queuing:
+
+    | Acuity | Description | Priority Assignment |
+    |--------|-------------|---------------------|
+    | **Resus** | Life-threatening, immediate | Always P1 |
+    | **Majors** | Serious, urgent treatment | 70% P2, 30% P3 |
+    | **Minors** | Less urgent, ambulatory | 60% P3, 40% P4 |
     """)
 
     col1, col2, col3 = st.columns(3)
@@ -176,52 +257,28 @@ with tab_acuity:
     st.plotly_chart(fig, use_container_width=True)
 
     # Priority distribution info
-    st.subheader("Priority Levels")
+    st.subheader("Priority Queue Behaviour")
     st.markdown("""
-    Patients are assigned priority levels (P1-P4) based on acuity:
-    - **P1 (Immediate)**: All Resus patients
-    - **P2 (Very Urgent)**: 70% of Majors
-    - **P3 (Urgent)**: 30% of Majors, 60% of Minors
-    - **P4 (Standard)**: 40% of Minors
+    **P1 patients bypass triage** and go directly to ED bays with highest priority.
 
-    Lower priority numbers are served first when queuing.
+    When multiple patients are waiting, **lower priority numbers are served first**:
+    - P1 (Immediate) → P2 (Very Urgent) → P3 (Urgent) → P4 (Standard)
     """)
 
-    # Disposition probabilities
-    st.subheader("Admission Probabilities by Acuity")
-    st.markdown("Probability a patient is admitted (vs discharged) after treatment:")
+    # Disposition routing info
+    st.subheader("Disposition Routing (Phase 5)")
+    st.markdown("""
+    Patients are routed based on **priority level** after ED treatment:
 
-    d_col1, d_col2, d_col3 = st.columns(3)
+    | Priority | Surgery | ITU | Ward | Exit |
+    |----------|---------|-----|------|------|
+    | P1 (Immediate) | 30% | 40% | 20% | 10% |
+    | P2 (Very Urgent) | 15% | 10% | 45% | 30% |
+    | P3 (Urgent) | 5% | 2% | 25% | 68% |
+    | P4 (Standard) | 2% | 0% | 5% | 93% |
 
-    with d_col1:
-        p_admit_resus = st.slider(
-            "P(Admit | Resus)",
-            min_value=0.0,
-            max_value=1.0,
-            value=scenario.resus_p_admit,
-            step=0.05,
-            help="~70-90% typically admitted",
-        )
-
-    with d_col2:
-        p_admit_majors = st.slider(
-            "P(Admit | Majors)",
-            min_value=0.0,
-            max_value=1.0,
-            value=scenario.majors_p_admit,
-            step=0.05,
-            help="~20-40% typically admitted",
-        )
-
-    with d_col3:
-        p_admit_minors = st.slider(
-            "P(Admit | Minors)",
-            min_value=0.0,
-            max_value=1.0,
-            value=scenario.minors_p_admit,
-            step=0.05,
-            help="~5-15% typically admitted",
-        )
+    *Routing probabilities are configured in the scenario's routing matrix.*
+    """)
 
 # ===== ARRIVALS TAB =====
 with tab_arrivals:
@@ -282,6 +339,61 @@ with tab_arrivals:
         )
         st.session_state.arrival_rate = arrival_rate
 
+    # Demand Scaling (Phase 5d)
+    st.subheader("Demand Scaling")
+    st.markdown("""
+    Scale arrival rates to simulate surge scenarios or quiet periods.
+    """)
+
+    # Presets
+    preset_col1, preset_col2, preset_col3 = st.columns(3)
+    with preset_col1:
+        if st.button("Normal (1.0x)", use_container_width=True):
+            st.session_state.demand_mult = 1.0
+    with preset_col2:
+        if st.button("Busy (+25%)", use_container_width=True):
+            st.session_state.demand_mult = 1.25
+    with preset_col3:
+        if st.button("Surge (+50%)", use_container_width=True):
+            st.session_state.demand_mult = 1.5
+
+    demand_multiplier = st.slider(
+        "Overall Demand Multiplier",
+        min_value=0.5,
+        max_value=3.0,
+        value=st.session_state.get("demand_mult", scenario.demand_multiplier),
+        step=0.1,
+        help="Scales ALL arrival streams",
+    )
+    st.session_state.demand_mult = demand_multiplier
+
+    st.caption("Per-stream fine tuning (applied on top of overall multiplier):")
+    scale_col1, scale_col2, scale_col3 = st.columns(3)
+    with scale_col1:
+        ambulance_rate_mult = st.slider(
+            "Ambulance",
+            min_value=0.0,
+            max_value=2.0,
+            value=scenario.ambulance_rate_multiplier,
+            step=0.1,
+        )
+    with scale_col2:
+        helicopter_rate_mult = st.slider(
+            "Helicopter",
+            min_value=0.0,
+            max_value=2.0,
+            value=scenario.helicopter_rate_multiplier,
+            step=0.1,
+        )
+    with scale_col3:
+        walkin_rate_mult = st.slider(
+            "Walk-in",
+            min_value=0.0,
+            max_value=2.0,
+            value=scenario.walkin_rate_multiplier,
+            step=0.1,
+        )
+
     # Routing information
     st.subheader("Patient Routing")
     st.markdown("""
@@ -293,7 +405,7 @@ with tab_arrivals:
     | Majors | - | Ward 25-45%, Exit 30-75% |
     | Minors | - | Ward 5-10%, Exit 90-95% |
 
-    Downstream nodes: Surgery → ITU/Ward, ITU → Ward, Ward → Exit
+    Downstream nodes: Surgery -> ITU/Ward, ITU -> Ward, Ward -> Exit
     """)
 
 # ===== SERVICE TIMES TAB =====
@@ -308,28 +420,17 @@ with tab_service:
     with t_col2:
         triage_cv = st.slider("Triage CV", min_value=0.1, max_value=1.0, value=scenario.triage_cv, step=0.1)
 
-    st.subheader("Treatment Times by Acuity")
+    st.subheader("ED Treatment Time")
+    st.markdown("""
+    **Phase 5: Single ED pool**
+    All patients use the same ED bays. Priority determines queue position, not service time.
+    """)
 
-    st.markdown("**Resus** (critical care)")
-    r_col1, r_col2 = st.columns(2)
-    with r_col1:
-        resus_mean = st.number_input("Mean Resus time", min_value=30, max_value=300, value=int(scenario.resus_mean))
-    with r_col2:
-        resus_cv = st.slider("Resus CV", min_value=0.1, max_value=1.5, value=scenario.resus_cv, step=0.1)
-
-    st.markdown("**Majors** (serious conditions)")
-    m_col1, m_col2 = st.columns(2)
-    with m_col1:
-        majors_mean = st.number_input("Mean Majors time", min_value=20, max_value=240, value=int(scenario.majors_mean))
-    with m_col2:
-        majors_cv = st.slider("Majors CV", min_value=0.1, max_value=1.5, value=scenario.majors_cv, step=0.1)
-
-    st.markdown("**Minors** (less urgent)")
-    mi_col1, mi_col2 = st.columns(2)
-    with mi_col1:
-        minors_mean = st.number_input("Mean Minors time", min_value=10, max_value=120, value=int(scenario.minors_mean))
-    with mi_col2:
-        minors_cv = st.slider("Minors CV", min_value=0.1, max_value=1.5, value=scenario.minors_cv, step=0.1)
+    ed_col1, ed_col2 = st.columns(2)
+    with ed_col1:
+        ed_service_mean = st.number_input("Mean ED treatment time", min_value=20, max_value=240, value=int(scenario.ed_service_mean))
+    with ed_col2:
+        ed_service_cv = st.slider("ED service CV", min_value=0.1, max_value=1.5, value=scenario.ed_service_cv, step=0.1)
 
     st.subheader("Boarding Time (for admitted patients)")
     b_col1, b_col2 = st.columns(2)
@@ -337,6 +438,19 @@ with tab_service:
         boarding_mean = st.number_input("Mean boarding time", min_value=0, max_value=480, value=int(scenario.boarding_mean))
     with b_col2:
         boarding_cv = st.slider("Boarding CV", min_value=0.1, max_value=2.0, value=scenario.boarding_cv, step=0.1)
+
+    st.subheader("Bed Turnaround (Phase 5e)")
+    st.markdown("""
+    Time to clean and prepare a bed after patient departure.
+    Bed is unavailable during turnaround.
+    """)
+    bed_turnaround = st.slider(
+        "Bed turnaround time (min)",
+        min_value=5,
+        max_value=30,
+        value=int(scenario.bed_turnaround_mins),
+        help="Cleaning time after patient leaves",
+    )
 
 # ===== EXPERIMENT TAB =====
 with tab_experiment:
@@ -374,11 +488,11 @@ with summary_col1:
 
 with summary_col2:
     st.metric("Triage Nurses", n_triage)
-    st.metric("Resus Bays", n_resus)
+    st.metric("ED Bays", n_ed_bays)
 
 with summary_col3:
-    st.metric("Majors Bays", n_majors)
-    st.metric("Minors Bays", n_minors)
+    st.metric("ED Treatment", f"{ed_service_mean} min")
+    st.metric("Boarding Time", f"{boarding_mean} min")
 
 with summary_col4:
     st.metric("Replications", n_reps)
@@ -386,7 +500,7 @@ with summary_col4:
 
 # ===== SAVE BUTTON =====
 st.divider()
-if st.button("💾 Save Scenario", type="primary", use_container_width=True):
+if st.button("Save Scenario", type="primary", use_container_width=True):
     try:
         st.session_state.scenario = FullScenario(
             run_length=run_hours * 60.0,
@@ -396,26 +510,28 @@ if st.button("💾 Save Scenario", type="primary", use_container_width=True):
             p_majors=p_majors / 100.0,
             p_minors=p_minors / 100.0,
             n_triage=n_triage,
-            n_resus_bays=n_resus,
-            n_majors_bays=n_majors,
-            n_minors_bays=n_minors,
+            n_ed_bays=n_ed_bays,
+            n_handover_bays=n_handover_bays,
+            handover_time_mean=float(handover_time_mean),
+            n_ambulances=n_ambulances,
+            n_helicopters=n_helicopters,
+            ambulance_turnaround_mins=float(ambulance_turnaround),
+            helicopter_turnaround_mins=float(helicopter_turnaround),
+            demand_multiplier=demand_multiplier,
+            ambulance_rate_multiplier=ambulance_rate_mult,
+            helicopter_rate_multiplier=helicopter_rate_mult,
+            walkin_rate_multiplier=walkin_rate_mult,
+            bed_turnaround_mins=float(bed_turnaround),
             triage_mean=float(triage_mean),
             triage_cv=triage_cv,
-            resus_mean=float(resus_mean),
-            resus_cv=resus_cv,
-            majors_mean=float(majors_mean),
-            majors_cv=majors_cv,
-            minors_mean=float(minors_mean),
-            minors_cv=minors_cv,
+            ed_service_mean=float(ed_service_mean),
+            ed_service_cv=ed_service_cv,
             boarding_mean=float(boarding_mean),
             boarding_cv=boarding_cv,
-            resus_p_admit=p_admit_resus,
-            majors_p_admit=p_admit_majors,
-            minors_p_admit=p_admit_minors,
             random_seed=random_seed,
         )
         st.session_state.n_reps = n_reps
         st.session_state.run_complete = False
-        st.success("✅ Scenario saved! Go to **Run** page to execute.")
+        st.success("Scenario saved! Go to **Run** page to execute.")
     except ValueError as e:
         st.error(f"Invalid configuration: {e}")

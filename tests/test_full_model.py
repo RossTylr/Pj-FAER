@@ -1,4 +1,4 @@
-"""Tests for full A&E pathway model."""
+"""Tests for full A&E pathway model (Phase 5 - simplified ED)."""
 
 import pytest
 import numpy as np
@@ -8,7 +8,6 @@ from faer.model.patient import Patient, Acuity, Disposition
 from faer.model.full_model import (
     run_full_simulation,
     assign_acuity,
-    determine_disposition,
 )
 
 
@@ -50,7 +49,7 @@ class TestPatient:
 
 
 class TestFullScenario:
-    """Test FullScenario configuration."""
+    """Test FullScenario configuration (Phase 5)."""
 
     def test_default_scenario(self):
         """Default FullScenario has valid values."""
@@ -58,9 +57,7 @@ class TestFullScenario:
 
         assert scenario.arrival_rate == 6.0
         assert scenario.n_triage == 2
-        assert scenario.n_resus_bays == 2
-        assert scenario.n_majors_bays == 10
-        assert scenario.n_minors_bays == 6
+        assert scenario.n_ed_bays == 20  # Phase 5: single ED pool
 
     def test_acuity_mix_validation(self):
         """Acuity mix must sum to 1.0."""
@@ -106,7 +103,7 @@ class TestAcuityAssignment:
 
 
 class TestFullSimulation:
-    """Test full A&E simulation."""
+    """Test full A&E simulation (Phase 5)."""
 
     def test_simulation_runs(self):
         """Simulation runs without error."""
@@ -142,15 +139,15 @@ class TestFullSimulation:
         )
         assert total_by_acuity == results["arrivals"]
 
-    def test_resus_bypass_triage(self):
-        """Resus patients have zero triage wait."""
+    def test_p1_bypass_triage(self):
+        """P1 patients have zero triage wait (bypass triage)."""
         scenario = FullScenario(
-            p_resus=1.0, p_majors=0.0, p_minors=0.0,  # All Resus
+            p_resus=1.0, p_majors=0.0, p_minors=0.0,  # All Resus (P1)
             run_length=480.0, warm_up=0.0, random_seed=42
         )
         results = run_full_simulation(scenario)
 
-        # Resus patients bypass triage, so triage wait should be 0
+        # P1 patients bypass triage, so triage wait should be 0
         assert results["mean_triage_wait"] == 0.0
 
     def test_admission_rate(self):
@@ -163,14 +160,12 @@ class TestFullSimulation:
         assert results["admitted"] + results["discharged"] == results["departures"]
 
     def test_utilisation_range(self):
-        """Utilisation is between 0 and 1."""
+        """Utilisation is between 0 and 1 (Phase 5: single ED pool)."""
         scenario = FullScenario(run_length=480.0, warm_up=0.0, random_seed=42)
         results = run_full_simulation(scenario)
 
         assert 0.0 <= results["util_triage"] <= 1.0
-        assert 0.0 <= results["util_resus"] <= 1.0
-        assert 0.0 <= results["util_majors"] <= 1.0
-        assert 0.0 <= results["util_minors"] <= 1.0
+        assert 0.0 <= results["util_ed_bays"] <= 1.0
 
     def test_warm_up_excludes_early_patients(self):
         """Warm-up period patients are excluded from metrics."""
@@ -187,17 +182,17 @@ class TestFullSimulation:
 
 
 class TestResourceConstraints:
-    """Test resource constraint effects."""
+    """Test resource constraint effects (Phase 5)."""
 
     def test_low_capacity_increases_wait(self):
         """Low capacity leads to longer waits."""
         # High capacity
         high_cap = FullScenario(
-            n_majors_bays=20, run_length=480.0, warm_up=0.0, random_seed=42
+            n_ed_bays=30, run_length=480.0, warm_up=0.0, random_seed=42
         )
         # Low capacity
         low_cap = FullScenario(
-            n_majors_bays=2, run_length=480.0, warm_up=0.0, random_seed=42
+            n_ed_bays=5, run_length=480.0, warm_up=0.0, random_seed=42
         )
 
         results_high = run_full_simulation(high_cap)
@@ -209,11 +204,45 @@ class TestResourceConstraints:
     def test_high_utilisation_with_low_capacity(self):
         """Low capacity leads to higher utilisation."""
         low_cap = FullScenario(
-            n_majors_bays=2,
+            n_ed_bays=5,
             arrival_rate=10.0,  # High arrival rate
             run_length=480.0, warm_up=0.0, random_seed=42
         )
         results = run_full_simulation(low_cap)
 
         # Expect moderate to high utilisation
-        assert results["util_majors"] > 0.3
+        assert results["util_ed_bays"] > 0.3
+
+
+class TestPriorityQueuing:
+    """Test priority queuing in single ED pool (Phase 5)."""
+
+    def test_p1_shorter_wait_than_p4(self):
+        """P1 patients should have shorter waits than P4."""
+        # Constrained resources to force queuing
+        scenario = FullScenario(
+            n_ed_bays=5,
+            arrival_rate=10.0,
+            run_length=480.0,
+            warm_up=60.0,
+            random_seed=42
+        )
+        results = run_full_simulation(scenario)
+
+        # P1 should have shorter wait than P4
+        assert results["P1_mean_wait"] <= results["P4_mean_wait"]
+
+    def test_priority_counts(self):
+        """Arrivals are split by priority."""
+        scenario = FullScenario(
+            run_length=480.0, warm_up=0.0, random_seed=42
+        )
+        results = run_full_simulation(scenario)
+
+        total_by_priority = (
+            results["arrivals_P1"]
+            + results["arrivals_P2"]
+            + results["arrivals_P3"]
+            + results["arrivals_P4"]
+        )
+        assert total_by_priority == results["arrivals"]

@@ -41,7 +41,7 @@ def multiple_replications(
                 "p_delay", "mean_triage_wait", "mean_treatment_wait",
                 "mean_system_time", "p95_system_time",
                 "admission_rate", "admitted", "discharged",
-                "util_triage", "util_resus", "util_majors", "util_minors",
+                "util_triage", "util_ed_bays", "util_handover", "util_ambulance_fleet",
             ]
         else:
             metric_names = ["p_delay", "mean_queue_time", "utilisation"]

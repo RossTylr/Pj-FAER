@@ -1,4 +1,4 @@
-"""Tests for downstream nodes (Phase 4)."""
+"""Tests for downstream nodes (Phase 5 - simplified ED)."""
 
 import pytest
 
@@ -34,18 +34,19 @@ class TestNodeConfig:
 
 
 class TestDefaultNodeConfigs:
-    """Test default node configurations."""
+    """Test default node configurations (Phase 5)."""
 
     def test_default_configs_created(self):
         """Default node configs are created automatically."""
         scenario = FullScenario()
-        assert len(scenario.node_configs) == 6
+        # Phase 5: TRIAGE, ED_BAYS, SURGERY, ITU, WARD
+        assert len(scenario.node_configs) == 5
 
     def test_all_nodes_configured(self):
-        """All nodes have configs."""
+        """All nodes have configs (Phase 5)."""
         scenario = FullScenario()
         expected_nodes = [
-            NodeType.RESUS, NodeType.MAJORS, NodeType.MINORS,
+            NodeType.TRIAGE, NodeType.ED_BAYS,
             NodeType.SURGERY, NodeType.ITU, NodeType.WARD
         ]
         for node in expected_nodes:
@@ -57,18 +58,18 @@ class TestDefaultNodeConfigs:
         assert NodeType.EXIT not in scenario.node_configs
 
     def test_downstream_nodes_have_larger_capacity(self):
-        """Ward has larger capacity than ED nodes."""
+        """Ward has larger capacity than ED bays."""
         scenario = FullScenario()
         ward_cap = scenario.node_configs[NodeType.WARD].capacity
-        resus_cap = scenario.node_configs[NodeType.RESUS].capacity
-        assert ward_cap > resus_cap
+        ed_cap = scenario.node_configs[NodeType.ED_BAYS].capacity
+        assert ward_cap > ed_cap
 
     def test_surgery_has_long_service_time(self):
         """Surgery has longer service time than ED."""
         scenario = FullScenario()
         surgery_time = scenario.node_configs[NodeType.SURGERY].service_time_mean
-        majors_time = scenario.node_configs[NodeType.MAJORS].service_time_mean
-        assert surgery_time > majors_time
+        ed_time = scenario.node_configs[NodeType.ED_BAYS].service_time_mean
+        assert surgery_time > ed_time
 
 
 class TestNodeConfigModification:

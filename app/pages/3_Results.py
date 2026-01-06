@@ -20,6 +20,14 @@ if not st.session_state.get("run_complete"):
 
 results = st.session_state.results
 scenario = st.session_state.scenario
+
+# Check for stale results (from before Phase 5 update)
+if "util_ed_bays" not in results:
+    st.warning("⚠️ Results are from an older version. Please re-run the simulation to see updated metrics.")
+    st.session_state.run_complete = False
+    st.page_link("pages/2_Run.py", label="Go to Run Simulation", icon="▶️")
+    st.stop()
+
 n_reps = len(results["arrivals"])
 
 # ===== KEY PERFORMANCE INDICATORS =====
@@ -81,28 +89,28 @@ with util_cols[0]:
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
 with util_cols[1]:
-    ci = compute_ci(results["util_resus"])
-    st.metric("Resus", f"{ci['mean']:.1%}")
+    ci = compute_ci(results["util_ed_bays"])
+    st.metric("ED Bays", f"{ci['mean']:.1%}")
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
 with util_cols[2]:
-    ci = compute_ci(results["util_majors"])
-    st.metric("Majors", f"{ci['mean']:.1%}")
+    ci = compute_ci(results["util_handover"])
+    st.metric("Handover", f"{ci['mean']:.1%}")
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
 with util_cols[3]:
-    ci = compute_ci(results["util_minors"])
-    st.metric("Minors", f"{ci['mean']:.1%}")
+    ci = compute_ci(results["util_ambulance_fleet"])
+    st.metric("Fleet", f"{ci['mean']:.1%}")
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
 # Utilisation bar chart
 util_data = pd.DataFrame({
-    "Resource": ["Triage", "Resus", "Majors", "Minors"],
+    "Resource": ["Triage", "ED Bays", "Handover", "Fleet"],
     "Utilisation": [
         np.mean(results["util_triage"]),
-        np.mean(results["util_resus"]),
-        np.mean(results["util_majors"]),
-        np.mean(results["util_minors"]),
+        np.mean(results["util_ed_bays"]),
+        np.mean(results["util_handover"]),
+        np.mean(results["util_ambulance_fleet"]),
     ]
 })
 
@@ -114,9 +122,9 @@ fig = px.bar(
     color="Resource",
     color_discrete_map={
         "Triage": "#636efa",
-        "Resus": "#ff4b4b",
-        "Majors": "#ffa62b",
-        "Minors": "#29b09d"
+        "ED Bays": "#ff4b4b",
+        "Handover": "#ffa62b",
+        "Fleet": "#29b09d"
     },
 )
 fig.update_layout(showlegend=False, yaxis_tickformat=".0%")
@@ -248,20 +256,20 @@ with dist_tab3:
 
     with util_hist_cols[0]:
         fig = px.histogram(
-            results["util_majors"],
+            results["util_ed_bays"],
             nbins=20,
             labels={"value": "Utilisation", "count": "Frequency"},
-            title="Distribution of Majors Utilisation",
+            title="Distribution of ED Bays Utilisation",
         )
         fig.update_layout(showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
     with util_hist_cols[1]:
         fig = px.histogram(
-            results["util_minors"],
+            results["util_handover"],
             nbins=20,
             labels={"value": "Utilisation", "count": "Frequency"},
-            title="Distribution of Minors Utilisation",
+            title="Distribution of Handover Utilisation",
         )
         fig.update_layout(showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
@@ -281,9 +289,9 @@ with config_cols[0]:
 with config_cols[1]:
     st.write("**Resources**")
     st.write(f"Triage: {scenario.n_triage}")
-    st.write(f"Resus: {scenario.n_resus_bays}")
-    st.write(f"Majors: {scenario.n_majors_bays}")
-    st.write(f"Minors: {scenario.n_minors_bays}")
+    st.write(f"ED Bays: {scenario.n_ed_bays}")
+    st.write(f"Handover: {scenario.n_handover_bays}")
+    st.write(f"Ambulances: {scenario.n_ambulances}")
 
 with config_cols[2]:
     st.write("**Acuity Mix**")
@@ -318,9 +326,9 @@ export_df = pd.DataFrame({
     "admitted": results["admitted"],
     "discharged": results["discharged"],
     "util_triage": results["util_triage"],
-    "util_resus": results["util_resus"],
-    "util_majors": results["util_majors"],
-    "util_minors": results["util_minors"],
+    "util_ed_bays": results["util_ed_bays"],
+    "util_handover": results["util_handover"],
+    "util_ambulance_fleet": results["util_ambulance_fleet"],
 })
 
 # Show preview

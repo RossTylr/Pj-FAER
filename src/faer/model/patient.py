@@ -47,6 +47,10 @@ class Patient:
     current_node: Optional[NodeType] = None  # Current location in hospital
 
     # Timestamps (filled during simulation)
+    handover_queue_start: Optional[float] = None  # Phase 5b
+    handover_start: Optional[float] = None  # Phase 5b
+    handover_end: Optional[float] = None  # Phase 5b
+    handover_released: Optional[float] = None  # Phase 5b - when handover bay released (after ED acquisition)
     triage_start: Optional[float] = None
     triage_end: Optional[float] = None
     treatment_start: Optional[float] = None
@@ -60,6 +64,20 @@ class Patient:
 
     # For tracking which resources were used
     resources_used: List[str] = field(default_factory=list)
+
+    @property
+    def handover_delay(self) -> float:
+        """Time waiting for handover bay (Phase 5b)."""
+        if self.handover_queue_start is not None and self.handover_start is not None:
+            return self.handover_start - self.handover_queue_start
+        return 0.0
+
+    @property
+    def handover_duration(self) -> float:
+        """Time in handover process (Phase 5b)."""
+        if self.handover_start is not None and self.handover_end is not None:
+            return self.handover_end - self.handover_start
+        return 0.0
 
     @property
     def triage_wait(self) -> float:
@@ -112,6 +130,17 @@ class Patient:
     def is_admitted(self) -> bool:
         """Whether patient was admitted."""
         return self.disposition in (Disposition.ADMIT_WARD, Disposition.ADMIT_ICU)
+
+    def record_handover(self, queue_start: float, start: float, end: float) -> None:
+        """Record handover timestamps (Phase 5b)."""
+        self.handover_queue_start = queue_start
+        self.handover_start = start
+        self.handover_end = end
+        self.resources_used.append("handover")
+
+    def record_handover_release(self, time: float) -> None:
+        """Record when handover bay was released (Phase 5b)."""
+        self.handover_released = time
 
     def record_triage(self, start: float, end: float) -> None:
         """Record triage timestamps."""

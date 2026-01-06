@@ -33,11 +33,11 @@ with col1:
 
 with col2:
     st.metric("Triage Nurses", scenario.n_triage)
-    st.metric("Resus Bays", scenario.n_resus_bays)
+    st.metric("ED Bays", scenario.n_ed_bays)
 
 with col3:
-    st.metric("Majors Bays", scenario.n_majors_bays)
-    st.metric("Minors Bays", scenario.n_minors_bays)
+    st.metric("Handover Bays", scenario.n_handover_bays)
+    st.metric("Ambulances", scenario.n_ambulances)
 
 with col4:
     st.metric("Replications", n_reps)
@@ -122,50 +122,55 @@ if st.button("🚀 Run Experiment", type="primary", use_container_width=True):
         st.metric("Triage", f"{np.mean(results['util_triage']):.1%}")
 
     with util_cols[1]:
-        st.metric("Resus", f"{np.mean(results['util_resus']):.1%}")
+        st.metric("ED Bays", f"{np.mean(results['util_ed_bays']):.1%}")
 
     with util_cols[2]:
-        st.metric("Majors", f"{np.mean(results['util_majors']):.1%}")
+        st.metric("Handover", f"{np.mean(results['util_handover']):.1%}")
 
     with util_cols[3]:
-        st.metric("Minors", f"{np.mean(results['util_minors']):.1%}")
+        st.metric("Fleet", f"{np.mean(results['util_ambulance_fleet']):.1%}")
 
     st.info("📈 Go to **Results** page for detailed analysis with confidence intervals.")
 
 # Show previous results if they exist
 elif st.session_state.get("run_complete"):
-    st.info(f"✅ Previous run completed in {st.session_state.get('run_time', 0):.1f}s. "
-            "Click **Run Experiment** to re-run, or view **Results**.")
-
     results = st.session_state.results
 
-    # Row 1: Key metrics
-    summary_cols = st.columns(4)
+    # Check for stale results (from before Phase 5 update)
+    if "util_ed_bays" not in results:
+        st.warning("⚠️ Previous results are from an older version. Click **Run Experiment** to update.")
+        st.session_state.run_complete = False
+    else:
+        st.info(f"✅ Previous run completed in {st.session_state.get('run_time', 0):.1f}s. "
+                "Click **Run Experiment** to re-run, or view **Results**.")
 
-    with summary_cols[0]:
-        st.metric("Mean Arrivals", f"{np.mean(results['arrivals']):.0f}")
+        # Row 1: Key metrics
+        summary_cols = st.columns(4)
 
-    with summary_cols[1]:
-        st.metric("Mean System Time", f"{np.mean(results['mean_system_time']):.1f} min")
+        with summary_cols[0]:
+            st.metric("Mean Arrivals", f"{np.mean(results['arrivals']):.0f}")
 
-    with summary_cols[2]:
-        st.metric("P(Delay)", f"{np.mean(results['p_delay']):.1%}")
+        with summary_cols[1]:
+            st.metric("Mean System Time", f"{np.mean(results['mean_system_time']):.1f} min")
 
-    with summary_cols[3]:
-        st.metric("Admission Rate", f"{np.mean(results['admission_rate']):.1%}")
+        with summary_cols[2]:
+            st.metric("P(Delay)", f"{np.mean(results['p_delay']):.1%}")
 
-    # Row 2: Utilisation
-    st.subheader("Resource Utilisation")
-    util_cols = st.columns(4)
+        with summary_cols[3]:
+            st.metric("Admission Rate", f"{np.mean(results['admission_rate']):.1%}")
 
-    with util_cols[0]:
-        st.metric("Triage", f"{np.mean(results['util_triage']):.1%}")
+        # Row 2: Utilisation
+        st.subheader("Resource Utilisation")
+        util_cols = st.columns(4)
 
-    with util_cols[1]:
-        st.metric("Resus", f"{np.mean(results['util_resus']):.1%}")
+        with util_cols[0]:
+            st.metric("Triage", f"{np.mean(results['util_triage']):.1%}")
 
-    with util_cols[2]:
-        st.metric("Majors", f"{np.mean(results['util_majors']):.1%}")
+        with util_cols[1]:
+            st.metric("ED Bays", f"{np.mean(results['util_ed_bays']):.1%}")
 
-    with util_cols[3]:
-        st.metric("Minors", f"{np.mean(results['util_minors']):.1%}")
+        with util_cols[2]:
+            st.metric("Handover", f"{np.mean(results['util_handover']):.1%}")
+
+        with util_cols[3]:
+            st.metric("Fleet", f"{np.mean(results['util_ambulance_fleet']):.1%}")

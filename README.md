@@ -56,7 +56,19 @@ pj_faer/
 
 ## Current Phase
 
-**Phase 0: Scaffolding** - Project skeleton with working dependencies.
+**Phase 4: System Realism** - Full A&E pathway with realistic hospital flow.
+
+### Phase 4 Features
+- **Priority Queuing (P1-P4)**: Triage priority levels with `PriorityResource`
+- **Simplified ED**: Single ED bay pool with priority-based service order
+- **Multi-Stream Arrivals**: Ambulance, Helicopter, Walk-in with different acuity mixes
+- **Handover Gate**: Ambulance/helicopter patients go through handover bays
+- **Fleet Resources**: Finite ambulance/helicopter fleet with turnaround times
+- **Downstream Nodes**: Surgery, ITU, Ward resources beyond ED
+
+### Recent Changes (January 2026)
+- Fixed `multiple_replications()` default metrics to include Phase 5 utilisation keys (`util_ed_bays`, `util_handover`, `util_ambulance_fleet`)
+- Aligns runner output with Streamlit UI expectations in `2_Run.py` and `3_Results.py`
 
 See [CLAUDE.md](CLAUDE.md) for development instructions and phase progression.
 

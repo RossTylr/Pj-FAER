@@ -1,4 +1,4 @@
-"""Tests for two-phase acquire blocking pattern (Phase 4)."""
+"""Tests for two-phase acquire blocking pattern (Phase 5)."""
 
 import pytest
 
@@ -15,17 +15,17 @@ class TestBoardingMetrics:
         """Results collector can record boarding events."""
         results = FullResultsCollector()
 
-        results.record_boarding(patient_id=1, from_node="resus", duration=30.0)
-        results.record_boarding(patient_id=2, from_node="majors", duration=45.0)
+        results.record_boarding(patient_id=1, from_node="ed_bays", duration=30.0)
+        results.record_boarding(patient_id=2, from_node="ed_bays", duration=45.0)
 
         assert len(results.boarding_events) == 2
-        assert results.boarding_events[0] == (1, "resus", 30.0)
+        assert results.boarding_events[0] == (1, "ed_bays", 30.0)
 
     def test_zero_duration_not_recorded(self):
         """Zero duration boarding is not recorded."""
         results = FullResultsCollector()
 
-        results.record_boarding(patient_id=1, from_node="resus", duration=0.0)
+        results.record_boarding(patient_id=1, from_node="ed_bays", duration=0.0)
 
         assert len(results.boarding_events) == 0
 
@@ -52,15 +52,15 @@ class TestPatientCurrentNode:
         )
         assert patient.current_node is None
 
-        patient.current_node = NodeType.MAJORS
-        assert patient.current_node == NodeType.MAJORS
+        patient.current_node = NodeType.ED_BAYS
+        assert patient.current_node == NodeType.ED_BAYS
 
     def test_node_transitions(self):
         """Patient can transition between nodes."""
         patient = Patient(id=1, arrival_time=0.0, acuity=Acuity.RESUS)
 
-        patient.current_node = NodeType.RESUS
-        assert patient.current_node == NodeType.RESUS
+        patient.current_node = NodeType.ED_BAYS
+        assert patient.current_node == NodeType.ED_BAYS
 
         patient.current_node = NodeType.ITU
         assert patient.current_node == NodeType.ITU

@@ -20,13 +20,12 @@ class Priority(IntEnum):
 
 class NodeType(IntEnum):
     """Service node types in the hospital network."""
-    RESUS = 1
-    MAJORS = 2
-    MINORS = 3
-    SURGERY = 4
-    ITU = 5
-    WARD = 6
-    EXIT = 7
+    TRIAGE = 1
+    ED_BAYS = 2      # Single ED bay pool (replaces Resus/Majors/Minors)
+    SURGERY = 3
+    ITU = 4
+    WARD = 5
+    EXIT = 6
 
 
 class ArrivalMode(IntEnum):
@@ -34,3 +33,15 @@ class ArrivalMode(IntEnum):
     AMBULANCE = 1
     HELICOPTER = 2
     SELF_PRESENTATION = 3  # Walk-in
+
+
+class BedState(IntEnum):
+    """Bed states for operational tracking (Phase 5e).
+
+    Used to track the operational state of individual beds/bays
+    for capacity planning and visualization.
+    """
+    EMPTY = 1        # Available for new patient
+    OCCUPIED = 2     # Patient receiving active care
+    BLOCKED = 3      # Patient boarding (waiting for downstream bed)
+    CLEANING = 4     # Turnaround after patient leaves

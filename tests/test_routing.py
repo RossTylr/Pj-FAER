@@ -1,4 +1,4 @@
-"""Tests for routing matrix (Phase 4)."""
+"""Tests for routing matrix (Phase 5 - simplified ED)."""
 
 import pytest
 from collections import Counter
@@ -13,12 +13,12 @@ class TestRoutingRule:
     def test_create_routing_rule(self):
         """Can create a routing rule."""
         rule = RoutingRule(
-            from_node=NodeType.RESUS,
+            from_node=NodeType.ED_BAYS,
             to_node=NodeType.SURGERY,
             priority=Priority.P1_IMMEDIATE,
             probability=0.3,
         )
-        assert rule.from_node == NodeType.RESUS
+        assert rule.from_node == NodeType.ED_BAYS
         assert rule.to_node == NodeType.SURGERY
         assert rule.priority == Priority.P1_IMMEDIATE
         assert rule.probability == 0.3
@@ -35,7 +35,7 @@ class TestRoutingValidation:
     def test_routing_validation_catches_bad_sum(self):
         """Routing that doesn't sum to 1.0 raises ValueError."""
         bad_rules = [
-            RoutingRule(NodeType.RESUS, NodeType.WARD, Priority.P1_IMMEDIATE, 0.5),
+            RoutingRule(NodeType.ED_BAYS, NodeType.WARD, Priority.P1_IMMEDIATE, 0.5),
             # Missing 0.5 probability
         ]
         with pytest.raises(ValueError, match="sums to"):
@@ -44,8 +44,8 @@ class TestRoutingValidation:
     def test_routing_validation_catches_over_sum(self):
         """Routing that sums to more than 1.0 raises ValueError."""
         bad_rules = [
-            RoutingRule(NodeType.RESUS, NodeType.WARD, Priority.P1_IMMEDIATE, 0.6),
-            RoutingRule(NodeType.RESUS, NodeType.EXIT, Priority.P1_IMMEDIATE, 0.6),
+            RoutingRule(NodeType.ED_BAYS, NodeType.WARD, Priority.P1_IMMEDIATE, 0.6),
+            RoutingRule(NodeType.ED_BAYS, NodeType.EXIT, Priority.P1_IMMEDIATE, 0.6),
         ]
         with pytest.raises(ValueError, match="sums to"):
             FullScenario(routing=bad_rules)
@@ -57,7 +57,7 @@ class TestGetNextNode:
     def test_get_next_node_returns_valid_node(self):
         """get_next_node returns a valid NodeType."""
         scenario = FullScenario(random_seed=42)
-        next_node = scenario.get_next_node(NodeType.RESUS, Priority.P1_IMMEDIATE)
+        next_node = scenario.get_next_node(NodeType.ED_BAYS, Priority.P1_IMMEDIATE)
         assert isinstance(next_node, NodeType)
         assert next_node in [NodeType.SURGERY, NodeType.ITU, NodeType.WARD, NodeType.EXIT]
 
@@ -72,9 +72,9 @@ class TestGetNextNode:
         """Over many samples, distribution matches probabilities."""
         scenario = FullScenario(random_seed=42)
 
-        # Sample 1000 times from Resus P1
+        # Sample 1000 times from ED_BAYS P1
         # Expected: Surgery 30%, ITU 40%, Ward 20%, Exit 10%
-        results = [scenario.get_next_node(NodeType.RESUS, Priority.P1_IMMEDIATE)
+        results = [scenario.get_next_node(NodeType.ED_BAYS, Priority.P1_IMMEDIATE)
                    for _ in range(1000)]
 
         counts = Counter(results)
@@ -99,30 +99,29 @@ class TestGetNextNode:
         scenario1 = FullScenario(random_seed=42)
         scenario2 = FullScenario(random_seed=42)
 
-        results1 = [scenario1.get_next_node(NodeType.RESUS, Priority.P1_IMMEDIATE)
+        results1 = [scenario1.get_next_node(NodeType.ED_BAYS, Priority.P1_IMMEDIATE)
                     for _ in range(100)]
-        results2 = [scenario2.get_next_node(NodeType.RESUS, Priority.P1_IMMEDIATE)
+        results2 = [scenario2.get_next_node(NodeType.ED_BAYS, Priority.P1_IMMEDIATE)
                     for _ in range(100)]
 
         assert results1 == results2
 
 
 class TestNodeType:
-    """Test NodeType enum."""
+    """Test NodeType enum - Phase 5 simplified."""
 
     def test_node_types_exist(self):
-        """All expected node types exist."""
-        assert NodeType.RESUS.value == 1
-        assert NodeType.MAJORS.value == 2
-        assert NodeType.MINORS.value == 3
-        assert NodeType.SURGERY.value == 4
-        assert NodeType.ITU.value == 5
-        assert NodeType.WARD.value == 6
-        assert NodeType.EXIT.value == 7
+        """All expected node types exist (Phase 5)."""
+        assert NodeType.TRIAGE.value == 1
+        assert NodeType.ED_BAYS.value == 2
+        assert NodeType.SURGERY.value == 3
+        assert NodeType.ITU.value == 4
+        assert NodeType.WARD.value == 5
+        assert NodeType.EXIT.value == 6
 
     def test_ed_nodes(self):
-        """ED nodes are distinct from downstream nodes."""
-        ed_nodes = {NodeType.RESUS, NodeType.MAJORS, NodeType.MINORS}
+        """ED nodes are distinct from downstream nodes (Phase 5)."""
+        ed_nodes = {NodeType.TRIAGE, NodeType.ED_BAYS}
         downstream_nodes = {NodeType.SURGERY, NodeType.ITU, NodeType.WARD}
 
         assert ed_nodes.isdisjoint(downstream_nodes)
