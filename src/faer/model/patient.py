@@ -5,7 +5,10 @@ from enum import Enum, auto
 from typing import Optional, List
 
 # Re-export from entities to maintain backwards compatibility
-from faer.core.entities import Priority, NodeType, ArrivalMode
+from faer.core.entities import (
+    Priority, NodeType, ArrivalMode, DiagnosticType,
+    TransferType, TransferDestination,
+)
 
 
 class Acuity(Enum):
@@ -64,6 +67,21 @@ class Patient:
 
     # For tracking which resources were used
     resources_used: List[str] = field(default_factory=list)
+
+    # Phase 7: Diagnostic tracking
+    diagnostics_required: List[DiagnosticType] = field(default_factory=list)
+    diagnostics_completed: List[DiagnosticType] = field(default_factory=list)
+    # Timestamps dict: stores {f'{diag_type.name}_queue_start': time, ...}
+    diagnostic_timestamps: dict = field(default_factory=dict)
+
+    # Phase 7: Transfer tracking
+    requires_transfer: bool = False
+    transfer_type: Optional[TransferType] = None
+    transfer_destination: Optional[TransferDestination] = None
+    transfer_decision_time: Optional[float] = None
+    transfer_requested_time: Optional[float] = None
+    transfer_vehicle_arrived_time: Optional[float] = None
+    transfer_departed_time: Optional[float] = None
 
     @property
     def handover_delay(self) -> float:
@@ -162,3 +180,74 @@ class Patient:
         """Record departure."""
         self.departure_time = time
         self.disposition = disposition
+
+    def record_diagnostic_event(self, diag_type: DiagnosticType, event: str, time: float) -> None:
+        """Record a diagnostic journey event (Phase 7).
+
+        Args:
+            diag_type: The diagnostic type (CT_SCAN, XRAY, BLOODS).
+            event: The event name (queue_start, start, end, return_to_bay, results_available).
+            time: The simulation time.
+        """
+        key = f"{diag_type.name}_{event}"
+        self.diagnostic_timestamps[key] = time
+
+    def complete_diagnostic(self, diag_type: DiagnosticType) -> None:
+        """Mark a diagnostic as completed (Phase 7)."""
+        if diag_type not in self.diagnostics_completed:
+            self.diagnostics_completed.append(diag_type)
+
+    @property
+    def total_diagnostic_time(self) -> float:
+        """Total time spent on diagnostics journey (Phase 7)."""
+        total = 0.0
+        for diag in self.diagnostics_completed:
+            start_key = f'{diag.name}_journey_start'
+            end_key = f'{diag.name}_results_available'
+            if start_key in self.diagnostic_timestamps:
+                end_time = self.diagnostic_timestamps.get(
+                    end_key,
+                    self.diagnostic_timestamps.get(f'{diag.name}_end', 0)
+                )
+                total += end_time - self.diagnostic_timestamps[start_key]
+        return total
+
+    def get_diagnostic_wait(self, diag_type: DiagnosticType) -> float:
+        """Get wait time for a specific diagnostic (Phase 7)."""
+        queue_key = f"{diag_type.name}_queue_start"
+        start_key = f"{diag_type.name}_start"
+        if queue_key in self.diagnostic_timestamps and start_key in self.diagnostic_timestamps:
+            return self.diagnostic_timestamps[start_key] - self.diagnostic_timestamps[queue_key]
+        return 0.0
+
+    @property
+    def transfer_wait_time(self) -> float:
+        """Time waiting for transfer vehicle (Phase 7)."""
+        if self.transfer_requested_time and self.transfer_vehicle_arrived_time:
+            return self.transfer_vehicle_arrived_time - self.transfer_requested_time
+        return 0.0
+
+    @property
+    def transfer_total_time(self) -> float:
+        """Total time for transfer process from decision to departure (Phase 7)."""
+        if self.transfer_decision_time and self.transfer_departed_time:
+            return self.transfer_departed_time - self.transfer_decision_time
+        return 0.0
+
+    def record_transfer(
+        self,
+        transfer_type: TransferType,
+        destination: TransferDestination,
+        decision_time: float,
+        requested_time: float,
+        vehicle_arrived_time: float,
+        departed_time: float,
+    ) -> None:
+        """Record transfer journey timestamps (Phase 7)."""
+        self.requires_transfer = True
+        self.transfer_type = transfer_type
+        self.transfer_destination = destination
+        self.transfer_decision_time = decision_time
+        self.transfer_requested_time = requested_time
+        self.transfer_vehicle_arrived_time = vehicle_arrived_time
+        self.transfer_departed_time = departed_time

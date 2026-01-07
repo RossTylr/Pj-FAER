@@ -6,7 +6,10 @@ from typing import Optional, List, Dict
 
 import numpy as np
 
-from faer.core.entities import NodeType, Priority, ArrivalMode, ArrivalModel, DayType
+from faer.core.entities import (
+    NodeType, Priority, ArrivalMode, ArrivalModel, DayType,
+    DiagnosticType, TransferType,
+)
 
 
 # Day type multipliers for arrival pattern adjustments (Phase 6)
@@ -132,6 +135,80 @@ class NodeConfig:
     capacity: int
     service_time_mean: float  # minutes
     service_time_cv: float = 0.5
+    enabled: bool = True
+
+
+@dataclass
+class DiagnosticConfig:
+    """Configuration for a diagnostic service (Phase 7).
+
+    Models CT scanners, X-ray rooms, and phlebotomy/lab services.
+    Each diagnostic has:
+    - capacity: Number of scanners/machines/staff
+    - process_time: Time for the actual scan/test
+    - turnaround_time: Additional wait for results (especially bloods)
+    - probability_by_priority: Likelihood patient needs this diagnostic
+
+    Attributes:
+        diagnostic_type: Type of diagnostic (CT, X-ray, Bloods).
+        capacity: Number of scanners/rooms/phlebotomists.
+        process_time_mean: Mean time for the scan/test in minutes.
+        process_time_cv: Coefficient of variation for process time.
+        turnaround_time_mean: Mean wait for results in minutes (e.g., lab turnaround).
+        turnaround_time_cv: CV for turnaround time.
+        enabled: Whether this diagnostic is available.
+        probability_by_priority: Dict mapping Priority to probability patient needs this.
+    """
+    diagnostic_type: DiagnosticType
+    capacity: int
+    process_time_mean: float  # Time for actual scan/test (mins)
+    process_time_cv: float = 0.3
+    turnaround_time_mean: float = 0.0  # Additional wait for results (bloods)
+    turnaround_time_cv: float = 0.3
+    enabled: bool = True
+    probability_by_priority: Dict[Priority, float] = field(default_factory=dict)
+
+
+@dataclass
+class TransferConfig:
+    """Configuration for inter-facility transfers (Phase 7).
+
+    Models transfers to specialist centres (Major Trauma, Neuro, Cardiac, etc.).
+    Includes land ambulance and helicopter transfer options.
+
+    Attributes:
+        probability_by_priority: Probability of transfer by patient priority.
+        n_transfer_ambulances: Dedicated transfer vehicle count.
+        n_transfer_helicopters: Air ambulance availability.
+        decision_to_request_mean: Time to arrange transfer (mins).
+        land_ambulance_wait_mean: Wait for land vehicle (mins).
+        helicopter_wait_mean: Wait for air ambulance (mins).
+        land_transfer_time_mean: Journey time by road (mins).
+        helicopter_transfer_time_mean: Journey time by air (mins).
+        helicopter_proportion_p1: Proportion of P1 transfers by helicopter.
+        enabled: Whether transfers are modelled.
+    """
+    probability_by_priority: Dict[Priority, float] = field(default_factory=lambda: {
+        Priority.P1_IMMEDIATE: 0.05,     # 5% of P1s need specialist transfer
+        Priority.P2_VERY_URGENT: 0.02,
+        Priority.P3_URGENT: 0.005,
+        Priority.P4_STANDARD: 0.001,
+    })
+
+    # Transfer resources
+    n_transfer_ambulances: int = 2
+    n_transfer_helicopters: int = 1
+
+    # Times (minutes)
+    decision_to_request_mean: float = 30.0   # Time to arrange transfer
+    land_ambulance_wait_mean: float = 45.0   # Wait for vehicle
+    helicopter_wait_mean: float = 30.0       # Air ambulance response
+    land_transfer_time_mean: float = 60.0    # Journey time by road
+    helicopter_transfer_time_mean: float = 25.0  # Journey time by air
+
+    # Proportion by transfer type (for P1)
+    helicopter_proportion_p1: float = 0.3  # 30% of P1 transfers by air
+
     enabled: bool = True
 
 
@@ -312,6 +389,16 @@ class FullScenario:
     # Node configurations (created in __post_init__ if not provided)
     node_configs: dict = field(default_factory=dict)  # Dict[NodeType, NodeConfig]
 
+    # Diagnostic configurations (Phase 7)
+    diagnostic_configs: dict = field(default_factory=dict)  # Dict[DiagnosticType, DiagnosticConfig]
+
+    # Transfer configuration (Phase 7)
+    transfer_config: Optional[TransferConfig] = None
+
+    # RNG for diagnostics (Phase 7) - created in __post_init__
+    rng_diagnostics: Optional[np.random.Generator] = None
+    rng_transfer: Optional[np.random.Generator] = None
+
     def __post_init__(self) -> None:
         """Initialize separate RNG streams and validate parameters."""
         # Validate acuity mix
@@ -331,6 +418,8 @@ class FullScenario:
         self.rng_disposition = np.random.default_rng(self.random_seed + 14)
         self.rng_routing = np.random.default_rng(self.random_seed + 15)
         self.rng_handover = np.random.default_rng(self.random_seed + 16)  # Phase 5b
+        self.rng_diagnostics = np.random.default_rng(self.random_seed + 17)  # Phase 7
+        self.rng_transfer = np.random.default_rng(self.random_seed + 18)  # Phase 7
 
         # Initialize default routing if not provided
         if not self.routing:
@@ -345,6 +434,14 @@ class FullScenario:
         if not self.node_configs:
             self.node_configs = self._default_node_configs()
 
+        # Initialize default diagnostic configs if not provided (Phase 7)
+        if not self.diagnostic_configs:
+            self.diagnostic_configs = self._default_diagnostic_configs()
+
+        # Initialize default transfer config if not provided (Phase 7)
+        if self.transfer_config is None:
+            self.transfer_config = TransferConfig()
+
     def _default_node_configs(self) -> dict:
         """Default node configurations.
 
@@ -356,6 +453,52 @@ class FullScenario:
             NodeType.SURGERY: NodeConfig(NodeType.SURGERY, capacity=2, service_time_mean=150),
             NodeType.ITU: NodeConfig(NodeType.ITU, capacity=6, service_time_mean=720),
             NodeType.WARD: NodeConfig(NodeType.WARD, capacity=30, service_time_mean=480),
+        }
+
+    def _default_diagnostic_configs(self) -> dict:
+        """Default diagnostic configurations (Phase 7).
+
+        CT scanner: 2 scanners, 20 min scan, 30 min radiologist report
+        X-ray: 3 rooms, 10 min, 15 min for report
+        Bloods: 5 phlebotomists, 5 min draw, 45 min lab turnaround
+        """
+        return {
+            DiagnosticType.CT_SCAN: DiagnosticConfig(
+                diagnostic_type=DiagnosticType.CT_SCAN,
+                capacity=2,                    # 2 CT scanners
+                process_time_mean=20.0,        # 20 min scan time
+                turnaround_time_mean=30.0,     # 30 min for radiologist report
+                probability_by_priority={
+                    Priority.P1_IMMEDIATE: 0.70,    # Most P1s need CT
+                    Priority.P2_VERY_URGENT: 0.40,
+                    Priority.P3_URGENT: 0.15,
+                    Priority.P4_STANDARD: 0.05,
+                }
+            ),
+            DiagnosticType.XRAY: DiagnosticConfig(
+                diagnostic_type=DiagnosticType.XRAY,
+                capacity=3,                    # 3 X-ray rooms
+                process_time_mean=10.0,        # 10 min
+                turnaround_time_mean=15.0,     # 15 min for report
+                probability_by_priority={
+                    Priority.P1_IMMEDIATE: 0.30,
+                    Priority.P2_VERY_URGENT: 0.35,
+                    Priority.P3_URGENT: 0.40,
+                    Priority.P4_STANDARD: 0.25,
+                }
+            ),
+            DiagnosticType.BLOODS: DiagnosticConfig(
+                diagnostic_type=DiagnosticType.BLOODS,
+                capacity=5,                    # Phlebotomy capacity
+                process_time_mean=5.0,         # 5 min to take bloods
+                turnaround_time_mean=45.0,     # 45 min lab turnaround
+                probability_by_priority={
+                    Priority.P1_IMMEDIATE: 0.90,
+                    Priority.P2_VERY_URGENT: 0.80,
+                    Priority.P3_URGENT: 0.50,
+                    Priority.P4_STANDARD: 0.20,
+                }
+            ),
         }
 
     def _default_routing(self) -> List[RoutingRule]:
@@ -594,4 +737,7 @@ class FullScenario:
             boarding_mean=self.boarding_mean,
             boarding_cv=self.boarding_cv,
             random_seed=new_seed,
+            # Phase 7: Copy diagnostic and transfer configs
+            diagnostic_configs=self.diagnostic_configs,
+            transfer_config=self.transfer_config,
         )

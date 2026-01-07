@@ -74,3 +74,40 @@ class DayType(Enum):
     SATURDAY_NIGHT = "sat_night"  # +40% night
     SUNDAY = "sunday"             # -15% overall
     BANK_HOLIDAY = "bank_holiday" # Weekend + 10%
+
+
+class DiagnosticType(IntEnum):
+    """Diagnostic service types (Phase 7).
+
+    Models key diagnostic resources that can become bottlenecks:
+    - CT_SCAN: CT scanner (high priority for P1/P2, slower)
+    - XRAY: X-ray rooms (moderate priority, faster)
+    - BLOODS: Phlebotomy + lab (high volume, has turnaround time)
+    """
+    CT_SCAN = 1
+    XRAY = 2
+    BLOODS = 3
+    # Future: MRI = 4, ULTRASOUND = 5
+
+
+class TransferType(IntEnum):
+    """Inter-facility transfer types (Phase 7).
+
+    Transfer mode affects wait time and journey duration.
+    """
+    LAND_AMBULANCE = 1      # Standard ambulance transfer
+    CRITICAL_CARE = 2       # With doctor/nurse escort
+    HELICOPTER = 3          # Air ambulance / coastguard
+
+
+class TransferDestination(IntEnum):
+    """Specialist receiving facilities (Phase 7).
+
+    Tracks where patients are transferred for planning/reporting.
+    """
+    MAJOR_TRAUMA_CENTRE = 1
+    NEUROSURGERY = 2
+    CARDIAC_CENTRE = 3
+    BURNS_UNIT = 4
+    PAEDIATRIC_ICU = 5
+    REGIONAL_ICU = 6

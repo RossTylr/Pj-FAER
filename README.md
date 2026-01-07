@@ -2,7 +2,7 @@
   <img src="assets/banner.jpeg" alt="Pj FAER Banner" width="100%">
 </p>
 
-# Pj FAER - Flow Analysis for Emergency Response
+# Pj FAER - Framework for Acute and Emergency Resources
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://pj-faer.streamlit.app)
 
@@ -56,19 +56,23 @@ pj_faer/
 
 ## Current Phase
 
-**Phase 4: System Realism** - Full A&E pathway with realistic hospital flow.
+**Phase 7: Diagnostics & Transfers** - Complete hospital flow with diagnostics and inter-facility transfers.
 
-### Phase 4 Features
-- **Priority Queuing (P1-P4)**: Triage priority levels with `PriorityResource`
-- **Simplified ED**: Single ED bay pool with priority-based service order
-- **Multi-Stream Arrivals**: Ambulance, Helicopter, Walk-in with different acuity mixes
-- **Handover Gate**: Ambulance/helicopter patients go through handover bays
-- **Fleet Resources**: Finite ambulance/helicopter fleet with turnaround times
-- **Downstream Nodes**: Surgery, ITU, Ward resources beyond ED
+### Phase 7 Features
+- **Diagnostic Nodes (CT, X-ray, Bloods)**: Patients queue for scans/tests with configurable capacity and turnaround times
+- **Diagnostics Loop**: Patients keep their ED bay while going for diagnostics (realistic blocking behaviour)
+- **Inter-Facility Transfers**: Land ambulance and helicopter transfers to specialist centres (Major Trauma, Neurosurgery, Cardiac, Burns, PICU)
+- **Arrival Models UI**: Three configuration modes - Simple (demand slider), 24-Hour Profile (day type patterns), and Detailed (hourly breakdown by mode)
+
+### Previous Phases
+- **Phase 4-6**: Priority queuing (P1-P4), multi-stream arrivals, handover gate, fleet resources, downstream nodes (Surgery/ITU/Ward), experimentation framework
 
 ### Recent Changes (January 2026)
-- Fixed `multiple_replications()` default metrics to include Phase 5 utilisation keys (`util_ed_bays`, `util_handover`, `util_ambulance_fleet`)
-- Aligns runner output with Streamlit UI expectations in `2_Run.py` and `3_Results.py`
+- Added CT scanner, X-ray, and Bloods diagnostic resources with priority-based probability
+- Implemented diagnostic loop where patients hold ED bay during scans
+- Added inter-facility transfer pathway with land ambulance and helicopter options
+- Updated Streamlit UI with arrival model selector (Simple/24-Hour Profile/Detailed modes)
+- Added diagnostic and transfer metrics tracking
 
 See [CLAUDE.md](CLAUDE.md) for development instructions and phase progression.
 

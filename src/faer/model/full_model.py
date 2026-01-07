@@ -9,14 +9,17 @@ For admitted patients: boarding wait after treatment.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Generator, List, Any, Optional
+from typing import Dict, Generator, List, Any, Optional, TYPE_CHECKING
 import itertools
 
 import numpy as np
 import simpy
 
 from faer.core.scenario import FullScenario, ArrivalConfig
-from faer.core.entities import ArrivalMode, Priority, NodeType, BedState
+from faer.core.entities import (
+    ArrivalMode, Priority, NodeType, BedState, DiagnosticType,
+    TransferType, TransferDestination,
+)
 from faer.model.patient import Patient, Acuity, Disposition
 
 
@@ -37,6 +40,8 @@ class AEResources:
     Lower priority values (P1) are served before higher values (P4).
     Phase 5b: Handover bays for ambulance/helicopter arrivals.
     Phase 5c: Fleet resources for ambulances and helicopters.
+    Phase 7: Diagnostic resources (CT, X-ray, Bloods).
+    Phase 7: Transfer resources (land ambulance, helicopter).
     """
 
     triage: simpy.PriorityResource
@@ -44,6 +49,13 @@ class AEResources:
     handover_bays: simpy.Resource  # Phase 5b: FIFO for ambulances (not priority)
     ambulance_fleet: simpy.Resource  # Phase 5c: Ambulance vehicles
     helicopter_fleet: simpy.Resource  # Phase 5c: Helicopter vehicles
+
+    # Phase 7: Diagnostic resources (priority queuing for CT/X-ray/Bloods)
+    diagnostics: Dict[DiagnosticType, simpy.PriorityResource] = field(default_factory=dict)
+
+    # Phase 7: Transfer resources
+    transfer_ambulances: Optional[simpy.Resource] = None
+    transfer_helicopters: Optional[simpy.Resource] = None
 
 
 @dataclass
@@ -82,6 +94,20 @@ class FullResultsCollector:
     # Bed state log (Phase 5e): [(node, bed_id, state, time), ...]
     bed_state_log: List[tuple] = field(default_factory=list)
 
+    # Phase 7: Diagnostic tracking
+    # diagnostic_waits[diag_type] = [wait_time, ...]
+    diagnostic_waits: Dict[DiagnosticType, List[float]] = field(default_factory=dict)
+    # diagnostic_turnarounds[diag_type] = [total_turnaround_time, ...]
+    diagnostic_turnarounds: Dict[DiagnosticType, List[float]] = field(default_factory=dict)
+
+    # Phase 7: Transfer tracking
+    # transfer_waits[transfer_type] = [wait_time, ...]
+    transfer_waits: Dict[TransferType, List[float]] = field(default_factory=dict)
+    # transfer_total_times[transfer_type] = [total_time, ...]
+    transfer_total_times: Dict[TransferType, List[float]] = field(default_factory=dict)
+    # Count of transfers by destination
+    transfers_by_destination: Dict[TransferDestination, int] = field(default_factory=dict)
+
     def __post_init__(self):
         for resource in ["triage", "ed_bays", "handover", "surgery", "itu", "ward",
                         "ambulance_fleet", "helicopter_fleet"]:
@@ -89,6 +115,18 @@ class FullResultsCollector:
         for p in Priority:
             self.arrivals_by_priority[p] = 0
             self.departures_by_priority[p] = 0
+        # Initialize diagnostic tracking (Phase 7)
+        for diag_type in DiagnosticType:
+            self.diagnostic_waits[diag_type] = []
+            self.diagnostic_turnarounds[diag_type] = []
+            self.resource_logs[f"diag_{diag_type.name}"] = [(0.0, 0)]
+        # Initialize transfer tracking (Phase 7)
+        for transfer_type in TransferType:
+            self.transfer_waits[transfer_type] = []
+            self.transfer_total_times[transfer_type] = []
+            self.resource_logs[f"transfer_{transfer_type.name}"] = [(0.0, 0)]
+        for dest in TransferDestination:
+            self.transfers_by_destination[dest] = 0
 
     def record_arrival(self, patient: Patient) -> None:
         """Record a patient arrival."""
@@ -132,6 +170,26 @@ class FullResultsCollector:
     def record_bed_state_change(self, node: NodeType, bed_id: int, state: BedState, time: float) -> None:
         """Record a bed state change (Phase 5e)."""
         self.bed_state_log.append((node, bed_id, state, time))
+
+    def record_diagnostic_wait(self, diag_type: DiagnosticType, wait_time: float) -> None:
+        """Record diagnostic queue wait time (Phase 7)."""
+        self.diagnostic_waits[diag_type].append(wait_time)
+
+    def record_diagnostic_turnaround(self, diag_type: DiagnosticType, turnaround: float) -> None:
+        """Record total diagnostic turnaround time (Phase 7)."""
+        self.diagnostic_turnarounds[diag_type].append(turnaround)
+
+    def record_transfer_wait(self, transfer_type: TransferType, wait_time: float) -> None:
+        """Record transfer vehicle wait time (Phase 7)."""
+        self.transfer_waits[transfer_type].append(wait_time)
+
+    def record_transfer_total(self, transfer_type: TransferType, total_time: float) -> None:
+        """Record total transfer process time (Phase 7)."""
+        self.transfer_total_times[transfer_type].append(total_time)
+
+    def record_transfer_destination(self, destination: TransferDestination) -> None:
+        """Record transfer destination (Phase 7)."""
+        self.transfers_by_destination[destination] = self.transfers_by_destination.get(destination, 0) + 1
 
     def compute_metrics(self, run_length: float, scenario: FullScenario) -> Dict:
         """Compute all KPIs from collected data.
@@ -264,6 +322,79 @@ class FullResultsCollector:
         )
         metrics.update(bed_state_metrics)
 
+        # Diagnostic metrics (Phase 7)
+        for diag_type in DiagnosticType:
+            waits = self.diagnostic_waits.get(diag_type, [])
+            turnarounds = self.diagnostic_turnarounds.get(diag_type, [])
+
+            if waits:
+                metrics[f"mean_wait_{diag_type.name}"] = float(np.mean(waits))
+                metrics[f"p95_wait_{diag_type.name}"] = float(np.percentile(waits, 95))
+            else:
+                metrics[f"mean_wait_{diag_type.name}"] = 0.0
+                metrics[f"p95_wait_{diag_type.name}"] = 0.0
+
+            if turnarounds:
+                metrics[f"mean_turnaround_{diag_type.name}"] = float(np.mean(turnarounds))
+            else:
+                metrics[f"mean_turnaround_{diag_type.name}"] = 0.0
+
+            # Diagnostic utilisation
+            diag_config = scenario.diagnostic_configs.get(diag_type)
+            if diag_config and diag_config.enabled:
+                metrics[f"util_{diag_type.name}"] = self._compute_utilisation(
+                    f"diag_{diag_type.name}", effective_run, diag_config.capacity, scenario.warm_up
+                )
+            else:
+                metrics[f"util_{diag_type.name}"] = 0.0
+
+            # Count of patients who had this diagnostic
+            metrics[f"count_{diag_type.name}"] = len(waits)
+
+        # Transfer metrics (Phase 7)
+        total_transfers = 0
+        for transfer_type in TransferType:
+            waits = self.transfer_waits.get(transfer_type, [])
+            totals = self.transfer_total_times.get(transfer_type, [])
+
+            if waits:
+                metrics[f"mean_transfer_wait_{transfer_type.name}"] = float(np.mean(waits))
+                metrics[f"p95_transfer_wait_{transfer_type.name}"] = float(np.percentile(waits, 95))
+            else:
+                metrics[f"mean_transfer_wait_{transfer_type.name}"] = 0.0
+                metrics[f"p95_transfer_wait_{transfer_type.name}"] = 0.0
+
+            if totals:
+                metrics[f"mean_transfer_total_{transfer_type.name}"] = float(np.mean(totals))
+            else:
+                metrics[f"mean_transfer_total_{transfer_type.name}"] = 0.0
+
+            metrics[f"count_transfer_{transfer_type.name}"] = len(waits)
+            total_transfers += len(waits)
+
+        # Transfer resource utilisation
+        if scenario.transfer_config.enabled:
+            metrics["util_transfer_ambulances"] = self._compute_utilisation(
+                f"transfer_{TransferType.LAND_AMBULANCE.name}",
+                effective_run,
+                scenario.transfer_config.n_transfer_ambulances,
+                scenario.warm_up
+            )
+            metrics["util_transfer_helicopters"] = self._compute_utilisation(
+                f"transfer_{TransferType.HELICOPTER.name}",
+                effective_run,
+                scenario.transfer_config.n_transfer_helicopters,
+                scenario.warm_up
+            )
+        else:
+            metrics["util_transfer_ambulances"] = 0.0
+            metrics["util_transfer_helicopters"] = 0.0
+
+        # Transfer counts by destination
+        metrics["total_transfers"] = total_transfers
+        for dest in TransferDestination:
+            metrics[f"transfers_to_{dest.name}"] = self.transfers_by_destination.get(dest, 0)
+
         return metrics
 
     def _compute_utilisation(self, resource: str, run_length: float, capacity: int, warm_up: float) -> float:
@@ -351,7 +482,7 @@ class FullResultsCollector:
 
     def _empty_metrics(self) -> Dict:
         """Return empty metrics dictionary."""
-        return {
+        metrics = {
             "arrivals": 0, "departures": 0,
             "arrivals_resus": 0, "arrivals_majors": 0, "arrivals_minors": 0,
             "arrivals_P1": 0, "arrivals_P2": 0, "arrivals_P3": 0, "arrivals_P4": 0,
@@ -369,6 +500,25 @@ class FullResultsCollector:
             "p95_handover_delay": 0.0, "handover_arrivals": 0,
             "ED_BAYS_pct_occupied": 0.0, "ED_BAYS_pct_blocked": 0.0, "ED_BAYS_pct_cleaning": 0.0,
         }
+        # Add diagnostic metrics (Phase 7)
+        for diag_type in DiagnosticType:
+            metrics[f"mean_wait_{diag_type.name}"] = 0.0
+            metrics[f"p95_wait_{diag_type.name}"] = 0.0
+            metrics[f"mean_turnaround_{diag_type.name}"] = 0.0
+            metrics[f"util_{diag_type.name}"] = 0.0
+            metrics[f"count_{diag_type.name}"] = 0
+        # Add transfer metrics (Phase 7)
+        for transfer_type in TransferType:
+            metrics[f"mean_transfer_wait_{transfer_type.name}"] = 0.0
+            metrics[f"p95_transfer_wait_{transfer_type.name}"] = 0.0
+            metrics[f"mean_transfer_total_{transfer_type.name}"] = 0.0
+            metrics[f"count_transfer_{transfer_type.name}"] = 0
+        metrics["util_transfer_ambulances"] = 0.0
+        metrics["util_transfer_helicopters"] = 0.0
+        metrics["total_transfers"] = 0
+        for dest in TransferDestination:
+            metrics[f"transfers_to_{dest.name}"] = 0
+        return metrics
 
 
 def assign_acuity(scenario: FullScenario) -> Acuity:
@@ -516,6 +666,314 @@ def boarding_process(
     patient.record_boarding(boarding_start, env.now)
 
 
+def determine_required_diagnostics(
+    patient: Patient,
+    scenario: FullScenario,
+) -> List[DiagnosticType]:
+    """Determine which diagnostics this patient needs based on priority (Phase 7).
+
+    Args:
+        patient: The patient to assess.
+        scenario: The scenario configuration.
+
+    Returns:
+        List of DiagnosticType enums for required diagnostics.
+    """
+    required = []
+
+    for diag_type, config in scenario.diagnostic_configs.items():
+        if not config.enabled:
+            continue
+
+        prob = config.probability_by_priority.get(patient.priority, 0)
+        if scenario.rng_diagnostics.random() < prob:
+            required.append(diag_type)
+
+    return required
+
+
+def diagnostic_process(
+    env: simpy.Environment,
+    patient: Patient,
+    diag_type: DiagnosticType,
+    resources: AEResources,
+    scenario: FullScenario,
+    results: FullResultsCollector,
+) -> Generator[simpy.Event, None, None]:
+    """Process a single diagnostic journey (Phase 7).
+
+    Patient KEEPS their ED bay while going for diagnostic.
+    This is the key realism: bay is blocked while patient is in CT.
+
+    Args:
+        env: SimPy environment.
+        patient: The patient needing diagnostic.
+        diag_type: Type of diagnostic (CT, X-ray, Bloods).
+        resources: A&E resources including diagnostics.
+        scenario: Scenario configuration.
+        results: Results collector.
+    """
+    if diag_type not in resources.diagnostics:
+        return
+
+    diag_resource = resources.diagnostics[diag_type]
+    diag_config = scenario.diagnostic_configs[diag_type]
+    resource_name = f"diag_{diag_type.name}"
+
+    # Record leaving bay for diagnostic
+    patient.record_diagnostic_event(diag_type, 'journey_start', env.now)
+
+    # Queue for diagnostic (patient still "owns" ED bay)
+    patient.record_diagnostic_event(diag_type, 'queue_start', env.now)
+
+    with diag_resource.request(priority=patient.priority.value) as diag_req:
+        yield diag_req
+
+        # Got the diagnostic resource
+        patient.record_diagnostic_event(diag_type, 'start', env.now)
+        results.record_resource_state(resource_name, env.now, diag_resource.count)
+
+        # Diagnostic process time
+        process_time = sample_lognormal(
+            scenario.rng_diagnostics,
+            diag_config.process_time_mean,
+            diag_config.process_time_cv
+        )
+        yield env.timeout(process_time)
+
+        patient.record_diagnostic_event(diag_type, 'end', env.now)
+
+    # Released diagnostic resource
+    results.record_resource_state(resource_name, env.now, diag_resource.count)
+
+    # Patient returns to bay
+    patient.record_diagnostic_event(diag_type, 'return_to_bay', env.now)
+
+    # Wait for results (turnaround time) - patient back in bay
+    if diag_config.turnaround_time_mean > 0:
+        turnaround = sample_lognormal(
+            scenario.rng_diagnostics,
+            diag_config.turnaround_time_mean,
+            diag_config.turnaround_time_cv
+        )
+        yield env.timeout(turnaround)
+        patient.record_diagnostic_event(diag_type, 'results_available', env.now)
+
+    # Mark diagnostic complete
+    patient.complete_diagnostic(diag_type)
+
+    # Record metrics
+    wait_time = patient.get_diagnostic_wait(diag_type)
+    results.record_diagnostic_wait(diag_type, wait_time)
+
+    # Total turnaround = journey_start to results_available (or end if no turnaround)
+    journey_start = patient.diagnostic_timestamps.get(f'{diag_type.name}_journey_start', env.now)
+    total_turnaround = env.now - journey_start
+    results.record_diagnostic_turnaround(diag_type, total_turnaround)
+
+
+def determine_transfer_required(
+    patient: Patient,
+    scenario: FullScenario,
+) -> bool:
+    """Determine if patient requires inter-facility transfer (Phase 7).
+
+    Args:
+        patient: The patient to assess.
+        scenario: The scenario configuration.
+
+    Returns:
+        True if patient requires transfer, False otherwise.
+    """
+    if not scenario.transfer_config.enabled:
+        return False
+
+    prob = scenario.transfer_config.probability_by_priority.get(patient.priority, 0)
+    return scenario.rng_transfer.random() < prob
+
+
+def select_transfer_destination(
+    patient: Patient,
+    scenario: FullScenario,
+) -> TransferDestination:
+    """Select transfer destination based on patient acuity (Phase 7).
+
+    More acute patients tend to go to specialist centres.
+
+    Args:
+        patient: The patient being transferred.
+        scenario: The scenario configuration.
+
+    Returns:
+        The TransferDestination for this patient.
+    """
+    rng = scenario.rng_transfer
+
+    if patient.acuity == Acuity.RESUS:
+        # P1/Resus patients typically go to specialist centres
+        destinations = [
+            TransferDestination.MAJOR_TRAUMA_CENTRE,
+            TransferDestination.NEUROSURGERY,
+            TransferDestination.CARDIAC_CENTRE,
+            TransferDestination.PAEDIATRIC_ICU,
+        ]
+        probs = [0.4, 0.25, 0.25, 0.1]
+    elif patient.acuity == Acuity.MAJORS:
+        # Majors typically need regional ICU or specialist
+        destinations = [
+            TransferDestination.REGIONAL_ICU,
+            TransferDestination.CARDIAC_CENTRE,
+            TransferDestination.BURNS_UNIT,
+            TransferDestination.MAJOR_TRAUMA_CENTRE,
+        ]
+        probs = [0.5, 0.2, 0.15, 0.15]
+    else:
+        # Minors - less common transfers, usually regional
+        destinations = [
+            TransferDestination.REGIONAL_ICU,
+            TransferDestination.BURNS_UNIT,
+        ]
+        probs = [0.7, 0.3]
+
+    idx = rng.choice(len(destinations), p=probs)
+    return destinations[idx]
+
+
+def select_transfer_type(
+    patient: Patient,
+    scenario: FullScenario,
+) -> TransferType:
+    """Select transfer vehicle type based on acuity and configuration (Phase 7).
+
+    P1 patients have higher chance of helicopter transfer.
+
+    Args:
+        patient: The patient being transferred.
+        scenario: The scenario configuration.
+
+    Returns:
+        The TransferType for this patient.
+    """
+    rng = scenario.rng_transfer
+    config = scenario.transfer_config
+
+    # P1 patients may get helicopter
+    if patient.priority == Priority.P1_IMMEDIATE:
+        if rng.random() < config.helicopter_proportion_p1:
+            return TransferType.HELICOPTER
+
+    # Otherwise, decide between land ambulance and critical care
+    # P1/P2 more likely to get critical care ambulance
+    if patient.priority in (Priority.P1_IMMEDIATE, Priority.P2_VERY_URGENT):
+        if rng.random() < 0.4:
+            return TransferType.CRITICAL_CARE
+
+    return TransferType.LAND_AMBULANCE
+
+
+def transfer_process(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: AEResources,
+    scenario: FullScenario,
+    results: FullResultsCollector,
+) -> Generator[simpy.Event, None, None]:
+    """Process inter-facility transfer (Phase 7).
+
+    Transfer sequence:
+    1. Decision made - determine destination and vehicle type
+    2. Request vehicle (wait for availability)
+    3. Vehicle arrives
+    4. Patient departs (releases ED bay)
+
+    Patient keeps ED bay until vehicle arrives and transfer begins.
+
+    Args:
+        env: SimPy environment.
+        patient: The patient being transferred.
+        resources: A&E resources including transfer fleet.
+        scenario: Scenario configuration.
+        results: Results collector.
+    """
+    config = scenario.transfer_config
+    decision_time = env.now
+
+    # Select destination and transfer type
+    destination = select_transfer_destination(patient, scenario)
+    transfer_type = select_transfer_type(patient, scenario)
+
+    patient.requires_transfer = True
+    patient.transfer_type = transfer_type
+    patient.transfer_destination = destination
+    patient.transfer_decision_time = decision_time
+
+    # Time from decision to actually requesting vehicle
+    decision_to_request = sample_lognormal(
+        scenario.rng_transfer,
+        config.decision_to_request_mean,
+        0.3  # CV
+    )
+    yield env.timeout(decision_to_request)
+
+    requested_time = env.now
+    patient.transfer_requested_time = requested_time
+
+    # Select appropriate fleet resource
+    if transfer_type == TransferType.HELICOPTER:
+        fleet = resources.transfer_helicopters
+        fleet_name = f"transfer_{TransferType.HELICOPTER.name}"
+        wait_mean = config.helicopter_wait_mean
+        transfer_duration_mean = config.helicopter_transfer_time_mean
+    else:
+        # Both LAND_AMBULANCE and CRITICAL_CARE use ambulance fleet
+        fleet = resources.transfer_ambulances
+        fleet_name = f"transfer_{TransferType.LAND_AMBULANCE.name}"
+        wait_mean = config.land_ambulance_wait_mean
+        transfer_duration_mean = config.land_transfer_time_mean
+
+    if fleet is None:
+        # Transfer not available, patient stays
+        return
+
+    # Wait for transfer vehicle
+    with fleet.request() as req:
+        yield req
+
+        vehicle_arrived_time = env.now
+        patient.transfer_vehicle_arrived_time = vehicle_arrived_time
+        results.record_resource_state(fleet_name, env.now, fleet.count)
+
+        # Vehicle response time (already waited in queue, add any additional time)
+        # The wait in queue IS the response time
+        wait_time = vehicle_arrived_time - requested_time
+        results.record_transfer_wait(transfer_type, wait_time)
+
+        # Transfer process (loading + travel)
+        transfer_duration = sample_lognormal(
+            scenario.rng_transfer,
+            transfer_duration_mean,
+            0.3  # CV
+        )
+        yield env.timeout(transfer_duration)
+
+        departed_time = env.now
+        patient.transfer_departed_time = departed_time
+
+    # Vehicle released
+    results.record_resource_state(fleet_name, env.now, fleet.count)
+
+    # Record full transfer
+    patient.record_transfer(
+        transfer_type, destination, decision_time,
+        requested_time, vehicle_arrived_time, departed_time
+    )
+
+    # Record metrics
+    total_time = departed_time - decision_time
+    results.record_transfer_total(transfer_type, total_time)
+    results.record_transfer_destination(destination)
+
+
 def vehicle_mission(
     env: simpy.Environment,
     patient: Patient,
@@ -578,6 +1036,9 @@ def patient_journey(
     Phase 5b: Ambulance/helicopter arrivals go through handover first.
     Handover bay is held until ED bay is acquired (feedback mechanism).
     Walk-ins bypass handover entirely.
+
+    Phase 7: Diagnostics loop - patient leaves bay for CT/X-ray/Bloods but
+    keeps the bay (blocking). Bay remains occupied during diagnostic journey.
     """
     # Record arrival
     results.record_arrival(patient)
@@ -616,28 +1077,47 @@ def patient_journey(
         bed_id = patient.id  # Use patient ID as proxy for bed ID
         results.record_bed_state_change(NodeType.ED_BAYS, bed_id, BedState.OCCUPIED, env.now)
 
+        # Phase 7: Determine required diagnostics AFTER initial assessment
+        # Typically done early in treatment when clinician assesses patient
+        patient.diagnostics_required = determine_required_diagnostics(patient, scenario)
+
+        # Phase 7: Process all required diagnostics
+        # Patient keeps their bay while going for diagnostics
+        for diag_type in patient.diagnostics_required:
+            yield from diagnostic_process(
+                env, patient, diag_type, resources, scenario, results
+            )
+
         # Treatment duration - single service time for all priorities
+        # This represents the remaining treatment after diagnostics
         mean, cv = scenario.get_treatment_params()
         duration = sample_lognormal(scenario.rng_treatment, mean, cv)
         yield env.timeout(duration)
 
         patient.record_treatment(treatment_start, env.now)
 
-        # Determine disposition using routing matrix
-        next_node = scenario.get_next_node(NodeType.ED_BAYS, patient.priority)
-
-        # Convert node to disposition
-        if next_node == NodeType.EXIT:
-            disposition = Disposition.DISCHARGE
-        elif next_node == NodeType.ITU:
-            disposition = Disposition.ADMIT_ICU
-        else:
-            disposition = Disposition.ADMIT_WARD
-
-        # Boarding for admitted patients (Phase 5e: bed is BLOCKED during boarding)
-        if disposition in (Disposition.ADMIT_WARD, Disposition.ADMIT_ICU):
+        # Phase 7: Check if patient requires inter-facility transfer
+        if determine_transfer_required(patient, scenario):
+            # Transfer process - patient keeps bay until vehicle arrives
+            disposition = Disposition.TRANSFER
             results.record_bed_state_change(NodeType.ED_BAYS, bed_id, BedState.BLOCKED, env.now)
-            yield from boarding_process(env, patient, scenario)
+            yield from transfer_process(env, patient, resources, scenario, results)
+        else:
+            # Determine disposition using routing matrix
+            next_node = scenario.get_next_node(NodeType.ED_BAYS, patient.priority)
+
+            # Convert node to disposition
+            if next_node == NodeType.EXIT:
+                disposition = Disposition.DISCHARGE
+            elif next_node == NodeType.ITU:
+                disposition = Disposition.ADMIT_ICU
+            else:
+                disposition = Disposition.ADMIT_WARD
+
+            # Boarding for admitted patients (Phase 5e: bed is BLOCKED during boarding)
+            if disposition in (Disposition.ADMIT_WARD, Disposition.ADMIT_ICU):
+                results.record_bed_state_change(NodeType.ED_BAYS, bed_id, BedState.BLOCKED, env.now)
+                yield from boarding_process(env, patient, scenario)
 
         # Phase 5e: Bed goes to CLEANING state
         results.record_bed_state_change(NodeType.ED_BAYS, bed_id, BedState.CLEANING, env.now)
@@ -790,12 +1270,34 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
     # Phase 5: Single ED bay pool
     # Phase 5b: Handover bays (FIFO, not priority)
     # Phase 5c: Fleet resources for ambulances and helicopters
+    # Phase 7: Diagnostic resources
+    diagnostic_resources = {}
+    for diag_type, config in scenario.diagnostic_configs.items():
+        if config.enabled:
+            diagnostic_resources[diag_type] = simpy.PriorityResource(
+                env, capacity=config.capacity
+            )
+
+    # Phase 7: Transfer resources
+    transfer_ambulances = None
+    transfer_helicopters = None
+    if scenario.transfer_config.enabled:
+        transfer_ambulances = simpy.Resource(
+            env, capacity=scenario.transfer_config.n_transfer_ambulances
+        )
+        transfer_helicopters = simpy.Resource(
+            env, capacity=scenario.transfer_config.n_transfer_helicopters
+        )
+
     resources = AEResources(
         triage=simpy.PriorityResource(env, capacity=scenario.n_triage),
         ed_bays=simpy.PriorityResource(env, capacity=scenario.n_ed_bays),
         handover_bays=simpy.Resource(env, capacity=scenario.n_handover_bays),
         ambulance_fleet=simpy.Resource(env, capacity=scenario.n_ambulances),
         helicopter_fleet=simpy.Resource(env, capacity=scenario.n_helicopters),
+        diagnostics=diagnostic_resources,
+        transfer_ambulances=transfer_ambulances,
+        transfer_helicopters=transfer_helicopters,
     )
 
     # Initialize results collector
