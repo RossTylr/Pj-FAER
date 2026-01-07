@@ -32,7 +32,7 @@ with col1:
     st.metric("Warm-up", f"{scenario.warm_up / 60:.0f}h")
 
 with col2:
-    st.metric("Triage Nurses", scenario.n_triage)
+    st.metric("Triage Clinicians", scenario.n_triage)
     st.metric("ED Bays", scenario.n_ed_bays)
 
 with col3:

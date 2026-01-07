@@ -60,7 +60,7 @@ def build_capacity_graph(scenario: FullScenario) -> str:
             style="dashed";
             color="gray";
 
-            Triage [label="Triage\\n{n_triage} staff", fillcolor="#90EE90"];
+            Triage [label="Triage\\n{n_triage} clinicians", fillcolor="#90EE90"];
             ED [label="ED Bays\\n{n_ed} beds", fillcolor="#98FB98"];
         }}
 
@@ -113,7 +113,7 @@ def build_simple_schematic(
         n_ambulances: Number of ambulance vehicles
         n_helicopters: Number of helicopter vehicles
         n_handover: Number of handover bays
-        n_triage: Number of triage staff
+        n_triage: Number of triage clinicians
         n_ed_bays: Number of ED bays
 
     Returns:

@@ -95,11 +95,11 @@ with tab_resources:
     with col1:
         st.subheader("Triage")
         n_triage = st.slider(
-            "Triage nurses",
+            "Triage clinicians",
             min_value=1,
             max_value=6,
             value=scenario.n_triage,
-            help="Number of triage assessment stations",
+            help="Includes nurses, ANPs, PAs, or doctors staffing triage",
         )
 
     with col2:
@@ -487,7 +487,7 @@ with summary_col1:
     st.metric("Warm-up", f"{warm_up_hours}h")
 
 with summary_col2:
-    st.metric("Triage Nurses", n_triage)
+    st.metric("Triage Clinicians", n_triage)
     st.metric("ED Bays", n_ed_bays)
 
 with summary_col3:

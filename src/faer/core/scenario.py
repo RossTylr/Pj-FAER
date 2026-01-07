@@ -2,11 +2,96 @@
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 import numpy as np
 
-from faer.core.entities import NodeType, Priority, ArrivalMode
+from faer.core.entities import NodeType, Priority, ArrivalMode, ArrivalModel, DayType
+
+
+# Day type multipliers for arrival pattern adjustments (Phase 6)
+DAY_TYPE_MULTIPLIERS: Dict[DayType, Dict] = {
+    DayType.WEEKDAY: {
+        'overall': 1.0,
+        'hourly_adjustments': {}  # No adjustments
+    },
+    DayType.MONDAY: {
+        'overall': 1.0,
+        'hourly_adjustments': {
+            7: 1.2, 8: 1.3, 9: 1.3, 10: 1.2, 11: 1.1  # Morning surge
+        }
+    },
+    DayType.FRIDAY_EVE: {
+        'overall': 1.0,
+        'hourly_adjustments': {
+            18: 1.2, 19: 1.3, 20: 1.4, 21: 1.4, 22: 1.3, 23: 1.2
+        }
+    },
+    DayType.SATURDAY_NIGHT: {
+        'overall': 1.0,
+        'hourly_adjustments': {
+            20: 1.3, 21: 1.4, 22: 1.5, 23: 1.5, 0: 1.4, 1: 1.3, 2: 1.2
+        }
+    },
+    DayType.SUNDAY: {
+        'overall': 0.85,
+        'hourly_adjustments': {
+            14: 1.1, 15: 1.15, 16: 1.1  # Afternoon family visit discoveries
+        }
+    },
+    DayType.BANK_HOLIDAY: {
+        'overall': 0.95,  # Slightly lower than weekend
+        'hourly_adjustments': {
+            20: 1.3, 21: 1.4, 22: 1.4, 23: 1.3  # Evening surge
+        }
+    },
+}
+
+
+# Simple demand level presets (Phase 6)
+DEMAND_LEVEL_MULTIPLIERS: Dict[str, float] = {
+    'Low': 0.75,
+    'Normal': 1.0,
+    'Busy': 1.25,
+    'Surge': 1.5,
+    'Major Incident': 2.0,
+}
+
+
+@dataclass
+class DetailedArrivalConfig:
+    """Per-hour, per-mode arrival counts (Phase 6).
+
+    Used with ArrivalModel.DETAILED for full control over arrivals.
+    Allows specifying exact numbers of ambulances, helicopters, and
+    walk-ins for each hour of the day.
+    """
+    # hourly_counts[hour][mode] = count
+    hourly_counts: Dict[int, Dict[ArrivalMode, int]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Initialize with zeros if empty
+        if not self.hourly_counts:
+            for hour in range(24):
+                self.hourly_counts[hour] = {
+                    ArrivalMode.AMBULANCE: 0,
+                    ArrivalMode.HELICOPTER: 0,
+                    ArrivalMode.SELF_PRESENTATION: 0,
+                }
+
+    def get_rate(self, hour: int, mode: ArrivalMode) -> float:
+        """Get arrival rate for specific hour and mode."""
+        return float(self.hourly_counts.get(hour, {}).get(mode, 0))
+
+    def set_rate(self, hour: int, mode: ArrivalMode, count: int) -> None:
+        """Set arrival count for specific hour and mode."""
+        if hour not in self.hourly_counts:
+            self.hourly_counts[hour] = {
+                ArrivalMode.AMBULANCE: 0,
+                ArrivalMode.HELICOPTER: 0,
+                ArrivalMode.SELF_PRESENTATION: 0,
+            }
+        self.hourly_counts[hour][mode] = count
 
 
 @dataclass
@@ -142,7 +227,7 @@ class FullScenario:
         p_minors: Proportion of Minors-level patients.
 
         Resources:
-        n_triage: Number of triage nurses.
+        n_triage: Number of triage clinicians (nurses, ANPs, PAs, or doctors).
         n_ed_bays: Number of ED bays (single pool with priority queuing).
 
         Service times (mean, cv) in minutes:
@@ -184,6 +269,11 @@ class FullScenario:
     ambulance_rate_multiplier: float = 1.0  # Per-stream scaling
     helicopter_rate_multiplier: float = 1.0
     walkin_rate_multiplier: float = 1.0
+
+    # Arrival model configuration (Phase 6)
+    arrival_model: ArrivalModel = ArrivalModel.PROFILE_24H
+    day_type: DayType = DayType.WEEKDAY
+    detailed_arrivals: Optional[DetailedArrivalConfig] = None
 
     # Bed management (Phase 5e)
     bed_turnaround_mins: float = 10.0  # Cleaning time after patient leaves
@@ -423,6 +513,53 @@ class FullScenario:
 
         return self.demand_multiplier * stream_multiplier
 
+    def get_effective_arrival_rate(self, config: ArrivalConfig, hour: int) -> float:
+        """Get arrival rate based on selected model and day type (Phase 6).
+
+        Computes the effective arrival rate considering:
+        - Simple model: Average rate across all hours * demand multiplier
+        - Profile 24h: Hourly rates with day type adjustments
+        - Detailed model: Exact per-mode, per-hour counts
+
+        Args:
+            config: ArrivalConfig for the stream (mode, hourly_rates, triage_mix).
+            hour: Hour of day (0-23).
+
+        Returns:
+            Effective arrival rate (patients per hour) for this config at this hour.
+        """
+        if self.arrival_model == ArrivalModel.SIMPLE:
+            # Use base rate * demand multiplier only
+            base_rate = sum(config.hourly_rates) / 24  # Average
+            return base_rate * self.demand_multiplier
+
+        elif self.arrival_model == ArrivalModel.PROFILE_24H:
+            # Use 24-hour profile with day type adjustments
+            base_rate = config.hourly_rates[hour]
+            day_config = DAY_TYPE_MULTIPLIERS[self.day_type]
+
+            rate = base_rate * day_config['overall']
+            rate *= day_config['hourly_adjustments'].get(hour, 1.0)
+            rate *= self.demand_multiplier
+
+            # Apply per-stream multiplier
+            stream_mult = {
+                ArrivalMode.AMBULANCE: self.ambulance_rate_multiplier,
+                ArrivalMode.HELICOPTER: self.helicopter_rate_multiplier,
+                ArrivalMode.SELF_PRESENTATION: self.walkin_rate_multiplier,
+            }
+            rate *= stream_mult.get(config.mode, 1.0)
+
+            return rate
+
+        elif self.arrival_model == ArrivalModel.DETAILED:
+            # Use detailed per-mode, per-hour counts
+            if self.detailed_arrivals:
+                return self.detailed_arrivals.get_rate(hour, config.mode)
+            return 0.0
+
+        return 0.0
+
     def clone_with_seed(self, new_seed: int) -> "FullScenario":
         """Create a copy with a different seed."""
         return FullScenario(
@@ -446,6 +583,9 @@ class FullScenario:
             ambulance_rate_multiplier=self.ambulance_rate_multiplier,
             helicopter_rate_multiplier=self.helicopter_rate_multiplier,
             walkin_rate_multiplier=self.walkin_rate_multiplier,
+            arrival_model=self.arrival_model,
+            day_type=self.day_type,
+            detailed_arrivals=self.detailed_arrivals,
             bed_turnaround_mins=self.bed_turnaround_mins,
             triage_mean=self.triage_mean,
             triage_cv=self.triage_cv,

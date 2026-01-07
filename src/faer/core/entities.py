@@ -4,7 +4,7 @@ This module contains enums and basic types that are used across
 the codebase, placed here to avoid circular imports.
 """
 
-from enum import IntEnum
+from enum import Enum, IntEnum
 
 
 class Priority(IntEnum):
@@ -45,3 +45,32 @@ class BedState(IntEnum):
     OCCUPIED = 2     # Patient receiving active care
     BLOCKED = 3      # Patient boarding (waiting for downstream bed)
     CLEANING = 4     # Turnaround after patient leaves
+
+
+class ArrivalModel(Enum):
+    """Arrival configuration complexity levels (Phase 6).
+
+    Three tiers of control over arrival patterns:
+    - SIMPLE: Single demand multiplier for quick scenario testing
+    - PROFILE_24H: Hourly rates with day type presets
+    - DETAILED: Per-mode, per-hour explicit control
+    """
+    SIMPLE = "simple"           # Single demand multiplier
+    PROFILE_24H = "profile_24h" # Hourly rates, same for all modes
+    DETAILED = "detailed"       # Per-mode, per-hour control
+
+
+class DayType(Enum):
+    """Day type presets affecting arrival patterns (Phase 6).
+
+    NHS patterns vary significantly by day of week:
+    - Monday: Morning surge from weekend backlog
+    - Friday/Saturday: Evening/night peaks (alcohol, accidents)
+    - Sunday: Quieter overall with afternoon family visit discoveries
+    """
+    WEEKDAY = "weekday"           # Tue-Thu baseline
+    MONDAY = "monday"             # +20% morning surge
+    FRIDAY_EVE = "friday_eve"     # +30% evening
+    SATURDAY_NIGHT = "sat_night"  # +40% night
+    SUNDAY = "sunday"             # -15% overall
+    BANK_HOLIDAY = "bank_holiday" # Weekend + 10%
