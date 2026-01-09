@@ -316,6 +316,31 @@ class FullResultsCollector:
             "helicopter_fleet", effective_run, scenario.n_helicopters, scenario.warm_up
         )
 
+        # Downstream resource utilisation (Phase 8)
+        # Theatre
+        if hasattr(scenario, 'theatre_config') and scenario.theatre_config:
+            metrics["util_theatre"] = self._compute_utilisation(
+                "surgery", effective_run, scenario.theatre_config.n_tables, scenario.warm_up
+            )
+        else:
+            metrics["util_theatre"] = 0.0
+
+        # ITU
+        if hasattr(scenario, 'itu_config') and scenario.itu_config:
+            metrics["util_itu"] = self._compute_utilisation(
+                "itu", effective_run, scenario.itu_config.capacity, scenario.warm_up
+            )
+        else:
+            metrics["util_itu"] = 0.0
+
+        # Ward
+        if hasattr(scenario, 'ward_config') and scenario.ward_config:
+            metrics["util_ward"] = self._compute_utilisation(
+                "ward", effective_run, scenario.ward_config.capacity, scenario.warm_up
+            )
+        else:
+            metrics["util_ward"] = 0.0
+
         # Bed state metrics (Phase 5e)
         bed_state_metrics = self._compute_bed_state_metrics(
             scenario.warm_up + run_length, scenario.warm_up

@@ -248,3 +248,192 @@ def build_simple_schematic(
     '''
 
     return dot
+
+
+def build_capacity_graph_from_params(
+    n_ambulances: int,
+    n_helicopters: int,
+    n_handover: int,
+    n_triage: int,
+    n_ed_bays: int,
+    n_ct: int,
+    n_xray: int,
+    n_bloods: int,
+    n_theatre: int,
+    n_itu: int,
+    n_ward: int,
+    ct_enabled: bool = True,
+    xray_enabled: bool = True,
+    bloods_enabled: bool = True
+) -> str:
+    """Generate Graphviz DOT with all resources and feedback loops.
+
+    Used by the Schematic page when scenario is not yet built.
+
+    Args:
+        n_ambulances: Number of ambulances
+        n_helicopters: Number of helicopters
+        n_handover: Number of handover bays
+        n_triage: Number of triage clinicians
+        n_ed_bays: Number of ED bays
+        n_ct: Number of CT scanners
+        n_xray: Number of X-ray rooms
+        n_bloods: Number of phlebotomists
+        n_theatre: Number of theatre tables
+        n_itu: Number of ITU beds
+        n_ward: Number of ward beds
+        ct_enabled: Whether CT is enabled
+        xray_enabled: Whether X-ray is enabled
+        bloods_enabled: Whether bloods is enabled
+
+    Returns:
+        DOT string for st.graphviz_chart()
+    """
+    # Build diagnostic nodes conditionally
+    diag_nodes = ""
+    diag_edges = ""
+
+    if ct_enabled:
+        diag_nodes += f'CT [label="CT\\n{n_ct}", fillcolor="#DDA0DD"];\n'
+        diag_edges += 'ED -> CT [style="dashed", color="purple"];\n'
+        diag_edges += 'CT -> ED [style="dashed", color="purple"];\n'
+
+    if xray_enabled:
+        diag_nodes += f'Xray [label="X-ray\\n{n_xray}", fillcolor="#DDA0DD"];\n'
+        diag_edges += 'ED -> Xray [style="dashed", color="purple"];\n'
+        diag_edges += 'Xray -> ED [style="dashed", color="purple"];\n'
+
+    if bloods_enabled:
+        diag_nodes += f'Bloods [label="Bloods\\n{n_bloods}", fillcolor="#DDA0DD"];\n'
+        diag_edges += 'ED -> Bloods [style="dashed", color="purple"];\n'
+        diag_edges += 'Bloods -> ED [style="dashed", color="purple"];\n'
+
+    return f'''
+    digraph Hospital {{
+        rankdir=LR; bgcolor="white";
+        node [shape=box, style="rounded,filled", fontsize=10];
+
+        // Arrival
+        Amb [label="Ambulances\\n{n_ambulances}", fillcolor="#FFE4B5"];
+        Heli [label="HEMS\\n{n_helicopters}", fillcolor="#FFE4B5"];
+        Walk [label="Walk-in", fillcolor="#E8E8E8"];
+
+        // Front door
+        Handover [label="Handover\\n{n_handover} bays", fillcolor="#FFDAB9"];
+        Triage [label="Triage\\n{n_triage}", fillcolor="#90EE90"];
+        ED [label="ED Bays\\n{n_ed_bays}", fillcolor="#98FB98"];
+
+        // Diagnostics
+        {diag_nodes}
+
+        // Downstream
+        Theatre [label="Theatre\\n{n_theatre}", fillcolor="#87CEEB"];
+        ITU [label="ITU\\n{n_itu}", fillcolor="#ADD8E6"];
+        Ward [label="Ward\\n{n_ward}", fillcolor="#B0E0E6"];
+        Exit [label="Exit", shape=oval, fillcolor="#D3D3D3"];
+
+        // Forward flow (blue)
+        Amb -> Handover [color="blue", penwidth=2];
+        Heli -> Handover [color="blue", penwidth=2];
+        Walk -> Triage [color="blue", penwidth=2];
+        Handover -> Triage [color="blue", penwidth=2];
+        Triage -> ED [color="blue", penwidth=2];
+        ED -> Theatre [color="blue"]; ED -> ITU [color="blue"];
+        ED -> Ward [color="blue"]; ED -> Exit [color="blue"];
+        Theatre -> ITU [color="blue"]; Theatre -> Ward [color="blue"];
+        ITU -> Ward [color="blue"]; Ward -> Exit [color="blue", penwidth=2];
+
+        // Diagnostics loop (purple)
+        {diag_edges}
+
+        // Feedback (red)
+        Ward -> ED [label="BLOCKED", color="red", penwidth=2, constraint=false];
+        ED -> Handover [label="BLOCKED", color="red", penwidth=2, constraint=false];
+    }}'''
+
+
+def build_feedback_diagram() -> str:
+    """Focused feedback cascade diagram.
+
+    Shows the blocking cascade that occurs when downstream beds fill up.
+
+    Returns:
+        DOT string for st.graphviz_chart()
+    """
+    return '''
+    digraph Cascade {
+        rankdir=LR; node [shape=box, style="rounded,filled"];
+        Ward [label="Ward FULL", fillcolor="#FFB6C1"];
+        ITU [label="ITU Blocked", fillcolor="#FFB6C1"];
+        ED [label="ED Boarding", fillcolor="#FFB6C1"];
+        Handover [label="Handover Delayed", fillcolor="#FFB6C1"];
+        Ambulance [label="Ambulances Queuing", fillcolor="#FFB6C1"];
+        Community [label="999 Delayed", fillcolor="#FF6B6B"];
+
+        Ward -> ITU [label="can\\'t step down", color="red", penwidth=2];
+        Ward -> ED [label="can\\'t admit", color="red", penwidth=2];
+        ED -> Handover [label="can\\'t accept", color="red", penwidth=2];
+        Handover -> Ambulance [label="crews wait", color="red", penwidth=2];
+        Ambulance -> Community [label="unavailable", color="red", penwidth=2];
+    }'''
+
+
+def build_results_schematic(
+    util_ed: float,
+    util_itu: float,
+    util_ward: float,
+    util_theatre: float,
+    util_ct: float,
+    util_handover: float,
+    n_ed: int,
+    n_itu: int,
+    n_ward: int,
+    n_theatre: int
+) -> str:
+    """Schematic colored by utilisation results.
+
+    Visualizes the system state based on simulation results, with
+    color-coding to highlight bottlenecks.
+
+    Args:
+        util_ed: ED bay utilisation (0-1)
+        util_itu: ITU utilisation (0-1)
+        util_ward: Ward utilisation (0-1)
+        util_theatre: Theatre utilisation (0-1)
+        util_ct: CT scanner utilisation (0-1)
+        util_handover: Handover bay utilisation (0-1)
+        n_ed: Number of ED bays
+        n_itu: Number of ITU beds
+        n_ward: Number of ward beds
+        n_theatre: Number of theatre tables
+
+    Returns:
+        DOT string for st.graphviz_chart()
+    """
+    def color(u: float) -> str:
+        """Get color based on utilisation level."""
+        if u > 0.85:
+            return "#FF6B6B"  # Red - critical
+        elif u > 0.70:
+            return "#FFD93D"  # Yellow - warning
+        else:
+            return "#6BCB77"  # Green - ok
+
+    def pct(u: float) -> str:
+        """Format utilisation as percentage."""
+        return f"{u:.0%}" if u > 0 else "-"
+
+    return f'''
+    digraph Results {{
+        rankdir=LR; node [shape=box, style="rounded,filled"];
+        Handover [label="Handover\\n{pct(util_handover)}", fillcolor="{color(util_handover)}"];
+        ED [label="ED ({n_ed})\\n{pct(util_ed)}", fillcolor="{color(util_ed)}"];
+        CT [label="CT\\n{pct(util_ct)}", fillcolor="{color(util_ct)}"];
+        Theatre [label="Theatre ({n_theatre})\\n{pct(util_theatre)}", fillcolor="{color(util_theatre)}"];
+        ITU [label="ITU ({n_itu})\\n{pct(util_itu)}", fillcolor="{color(util_itu)}"];
+        Ward [label="Ward ({n_ward})\\n{pct(util_ward)}", fillcolor="{color(util_ward)}"];
+
+        Handover -> ED; ED -> CT [style="dashed"]; CT -> ED [style="dashed"];
+        ED -> Theatre; ED -> ITU; ED -> Ward;
+        Theatre -> ITU; Theatre -> Ward; ITU -> Ward;
+    }}'''

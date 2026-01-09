@@ -41,7 +41,13 @@ def multiple_replications(
                 "p_delay", "mean_triage_wait", "mean_treatment_wait",
                 "mean_system_time", "p95_system_time",
                 "admission_rate", "admitted", "discharged",
-                "util_triage", "util_ed_bays", "util_handover", "util_ambulance_fleet",
+                # Resource utilisation
+                "util_triage", "util_ed_bays", "util_handover",
+                "util_ambulance_fleet", "util_helicopter_fleet",
+                # Downstream utilisation (Phase 8)
+                "util_theatre", "util_itu", "util_ward",
+                # Diagnostic utilisation
+                "util_CT_SCAN", "util_XRAY", "util_BLOODS",
             ]
         else:
             metric_names = ["p_delay", "mean_queue_time", "utilisation"]

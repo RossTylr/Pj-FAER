@@ -15,17 +15,18 @@ st.title("📈 Results")
 # Check for results
 if not st.session_state.get("run_complete"):
     st.warning("⚠️ Please run a simulation first.")
-    st.page_link("pages/2_Run.py", label="Go to Run Simulation", icon="▶️")
+    st.page_link("pages/4_Run.py", label="Go to Run Simulation", icon="▶️")
     st.stop()
 
-results = st.session_state.results
-scenario = st.session_state.scenario
+# Support both old key (results) and new key (run_results)
+results = st.session_state.get('run_results') or st.session_state.get('results')
+scenario = st.session_state.get('run_scenario') or st.session_state.get('scenario')
 
 # Check for stale results (from before Phase 5 update)
 if "util_ed_bays" not in results:
     st.warning("⚠️ Results are from an older version. Please re-run the simulation to see updated metrics.")
     st.session_state.run_complete = False
-    st.page_link("pages/2_Run.py", label="Go to Run Simulation", icon="▶️")
+    st.page_link("pages/4_Run.py", label="Go to Run Simulation", icon="▶️")
     st.stop()
 
 n_reps = len(results["arrivals"])
@@ -78,39 +79,116 @@ with kpi_cols[3]:
 
 st.divider()
 
-# ===== RESOURCE UTILISATION =====
+# ===== RESOURCE UTILISATION - EXPANDED =====
 st.header("Resource Utilisation")
 
-util_cols = st.columns(4)
+# Helper to safely get utilisation with fallback
+def get_util(key: str, default: float = 0.0):
+    """Get utilisation from results with fallback."""
+    if key in results and results[key]:
+        return results[key]
+    return [default] * n_reps
 
-with util_cols[0]:
-    ci = compute_ci(results["util_triage"])
+# --- Emergency Services ---
+st.subheader("Emergency Services")
+es_cols = st.columns(3)
+
+with es_cols[0]:
+    ci = compute_ci(get_util("util_ambulance_fleet"))
+    st.metric("Ambulance Fleet", f"{ci['mean']:.1%}")
+    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+with es_cols[1]:
+    ci = compute_ci(get_util("util_helicopter_fleet"))
+    st.metric("HEMS Fleet", f"{ci['mean']:.1%}")
+    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+with es_cols[2]:
+    ci = compute_ci(get_util("util_handover"))
+    st.metric("Handover Bays", f"{ci['mean']:.1%}")
+    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+# --- Triage & ED ---
+st.subheader("Triage & ED")
+ed_cols = st.columns(2)
+
+with ed_cols[0]:
+    ci = compute_ci(get_util("util_triage"))
     st.metric("Triage", f"{ci['mean']:.1%}")
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-with util_cols[1]:
-    ci = compute_ci(results["util_ed_bays"])
+with ed_cols[1]:
+    ci = compute_ci(get_util("util_ed_bays"))
     st.metric("ED Bays", f"{ci['mean']:.1%}")
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-with util_cols[2]:
-    ci = compute_ci(results["util_handover"])
-    st.metric("Handover", f"{ci['mean']:.1%}")
+# --- Diagnostics ---
+st.subheader("Diagnostics")
+diag_cols = st.columns(3)
+
+with diag_cols[0]:
+    ci = compute_ci(get_util("util_CT_SCAN"))
+    st.metric("CT Scanner", f"{ci['mean']:.1%}")
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-with util_cols[3]:
-    ci = compute_ci(results["util_ambulance_fleet"])
-    st.metric("Fleet", f"{ci['mean']:.1%}")
+with diag_cols[1]:
+    ci = compute_ci(get_util("util_XRAY"))
+    st.metric("X-ray", f"{ci['mean']:.1%}")
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-# Utilisation bar chart
+with diag_cols[2]:
+    ci = compute_ci(get_util("util_BLOODS"))
+    st.metric("Bloods", f"{ci['mean']:.1%}")
+    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+# --- Downstream: Theatre, ITU, Ward ---
+st.subheader("Downstream (Theatre, ITU, Ward)")
+ds_cols = st.columns(3)
+
+with ds_cols[0]:
+    ci = compute_ci(get_util("util_theatre"))
+    st.metric("Theatre", f"{ci['mean']:.1%}")
+    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+with ds_cols[1]:
+    ci = compute_ci(get_util("util_itu"))
+    st.metric("ITU", f"{ci['mean']:.1%}")
+    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+with ds_cols[2]:
+    ci = compute_ci(get_util("util_ward"))
+    st.metric("Ward", f"{ci['mean']:.1%}")
+    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+# Utilisation bar chart - all resources
+st.markdown("---")
+st.subheader("Utilisation Overview")
+
 util_data = pd.DataFrame({
-    "Resource": ["Triage", "ED Bays", "Handover", "Fleet"],
+    "Resource": [
+        "Ambulance", "HEMS", "Handover",
+        "Triage", "ED Bays",
+        "CT", "X-ray", "Bloods",
+        "Theatre", "ITU", "Ward"
+    ],
+    "Category": [
+        "Emergency", "Emergency", "Emergency",
+        "ED", "ED",
+        "Diagnostics", "Diagnostics", "Diagnostics",
+        "Downstream", "Downstream", "Downstream"
+    ],
     "Utilisation": [
-        np.mean(results["util_triage"]),
-        np.mean(results["util_ed_bays"]),
-        np.mean(results["util_handover"]),
-        np.mean(results["util_ambulance_fleet"]),
+        np.mean(get_util("util_ambulance_fleet")),
+        np.mean(get_util("util_helicopter_fleet")),
+        np.mean(get_util("util_handover")),
+        np.mean(get_util("util_triage")),
+        np.mean(get_util("util_ed_bays")),
+        np.mean(get_util("util_CT_SCAN")),
+        np.mean(get_util("util_XRAY")),
+        np.mean(get_util("util_BLOODS")),
+        np.mean(get_util("util_theatre")),
+        np.mean(get_util("util_itu")),
+        np.mean(get_util("util_ward")),
     ]
 })
 
@@ -118,16 +196,16 @@ fig = px.bar(
     util_data,
     x="Resource",
     y="Utilisation",
-    title="Mean Resource Utilisation",
-    color="Resource",
+    title="Mean Resource Utilisation Across System",
+    color="Category",
     color_discrete_map={
-        "Triage": "#636efa",
-        "ED Bays": "#ff4b4b",
-        "Handover": "#ffa62b",
-        "Fleet": "#29b09d"
+        "Emergency": "#ffa62b",
+        "ED": "#ff4b4b",
+        "Diagnostics": "#ab63fa",
+        "Downstream": "#636efa"
     },
 )
-fig.update_layout(showlegend=False, yaxis_tickformat=".0%")
+fig.update_layout(yaxis_tickformat=".0%", xaxis_tickangle=-45)
 fig.add_hline(y=0.85, line_dash="dash", line_color="red", annotation_text="Target (85%)")
 st.plotly_chart(fig, use_container_width=True)
 
@@ -325,10 +403,21 @@ export_df = pd.DataFrame({
     "admission_rate": results["admission_rate"],
     "admitted": results["admitted"],
     "discharged": results["discharged"],
-    "util_triage": results["util_triage"],
-    "util_ed_bays": results["util_ed_bays"],
-    "util_handover": results["util_handover"],
-    "util_ambulance_fleet": results["util_ambulance_fleet"],
+    # Emergency Services
+    "util_ambulance_fleet": get_util("util_ambulance_fleet"),
+    "util_helicopter_fleet": get_util("util_helicopter_fleet"),
+    "util_handover": get_util("util_handover"),
+    # Triage & ED
+    "util_triage": get_util("util_triage"),
+    "util_ed_bays": get_util("util_ed_bays"),
+    # Diagnostics
+    "util_ct": get_util("util_CT_SCAN"),
+    "util_xray": get_util("util_XRAY"),
+    "util_bloods": get_util("util_BLOODS"),
+    # Downstream
+    "util_theatre": get_util("util_theatre"),
+    "util_itu": get_util("util_itu"),
+    "util_ward": get_util("util_ward"),
 })
 
 # Show preview
@@ -354,10 +443,11 @@ with col1:
     )
 
 with col2:
-    # Create summary with CIs
+    # Create summary with CIs from export dataframe
     summary_data = []
     for metric in export_df.columns[1:]:  # Skip replication column
-        ci = compute_ci(results[metric])
+        values = export_df[metric].tolist()
+        ci = compute_ci(values)
         summary_data.append({
             "metric": metric,
             "mean": ci["mean"],
