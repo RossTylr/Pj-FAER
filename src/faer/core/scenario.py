@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional, List, Dict
 
 import numpy as np
@@ -10,6 +11,178 @@ from faer.core.entities import (
     NodeType, Priority, ArrivalMode, ArrivalModel, DayType,
     DiagnosticType, TransferType,
 )
+
+
+# ============== Phase 8: Run Length Presets ==============
+
+class RunLengthPreset(Enum):
+    """Standard run length options (Phase 8).
+
+    Provides preset durations from 12 hours to 72 hours (3 days).
+    Longer runs show compounding effects of capacity constraints.
+    """
+    HALF_DAY = 12 * 60      # 720 mins = 12 hours
+    ONE_DAY = 24 * 60       # 1440 mins = 24 hours
+    THIRTY_SIX_H = 36 * 60  # 2160 mins = 36 hours
+    TWO_DAYS = 48 * 60      # 2880 mins = 48 hours
+    SIXTY_H = 60 * 60       # 3600 mins = 60 hours
+    THREE_DAYS = 72 * 60    # 4320 mins = 72 hours
+
+    @property
+    def hours(self) -> int:
+        """Return duration in hours."""
+        return self.value // 60
+
+    @property
+    def minutes(self) -> int:
+        """Return duration in minutes."""
+        return self.value
+
+    @property
+    def label(self) -> str:
+        """Return human-readable label."""
+        h = self.hours
+        if h <= 24:
+            return f"{h} hours"
+        else:
+            return f"{h} hours ({h/24:.1f} days)"
+
+
+# ============== Phase 8: ITU Configuration ==============
+
+@dataclass
+class ITUConfig:
+    """Intensive Care Unit configuration (Phase 8).
+
+    Models ITU beds with step-down pathway to Ward.
+    Key metrics: occupancy, refused admissions, step-down delays.
+
+    Attributes:
+        capacity: Number of ITU beds.
+        los_mean_hours: Average length of stay in hours.
+        los_cv: Coefficient of variation for LoS (high variability typical).
+        step_down_to_ward_prob: Probability patient steps down to Ward.
+        direct_discharge_prob: Probability of rare direct discharge from ITU.
+        death_prob: In-ITU mortality rate.
+        min_step_down_ready_hours: Minimum time before patient ready for step-down.
+        enabled: Whether ITU is modelled.
+    """
+    capacity: int = 6
+    los_mean_hours: float = 48.0
+    los_cv: float = 0.8
+
+    # Step-down routing probabilities (must sum to 1.0)
+    step_down_to_ward_prob: float = 0.85
+    direct_discharge_prob: float = 0.05
+    death_prob: float = 0.10
+
+    # Step-down timing
+    min_step_down_ready_hours: float = 12.0
+
+    enabled: bool = True
+
+    def __post_init__(self):
+        # Validate probabilities sum to 1.0
+        total = self.step_down_to_ward_prob + self.direct_discharge_prob + self.death_prob
+        if abs(total - 1.0) > 0.001:
+            raise ValueError(
+                f"ITU outcome probabilities must sum to 1.0, got {total}"
+            )
+
+    @property
+    def los_mean_mins(self) -> float:
+        """Return LoS in minutes for simulation."""
+        return self.los_mean_hours * 60
+
+
+# ============== Phase 8: Ward Configuration ==============
+
+@dataclass
+class WardConfig:
+    """Ward bed configuration (Phase 8).
+
+    Models ward beds with configurable LoS and turnaround.
+    Ward is often the system bottleneck affecting upstream flow.
+
+    Attributes:
+        capacity: Number of ward beds.
+        los_mean_hours: Average length of stay in hours (typically 72h = 3 days).
+        los_cv: Coefficient of variation (high due to mix of simple/complex cases).
+        turnaround_mins: Bed cleaning/prep time between patients.
+        discharge_bias_hours: Hours when discharge is more likely (default 10-14).
+        enabled: Whether Ward is modelled.
+    """
+    capacity: int = 30
+    los_mean_hours: float = 72.0  # 3 days average
+    los_cv: float = 1.0  # High variability
+
+    turnaround_mins: float = 30.0
+
+    # Discharge pattern (optional - hours when discharge more likely)
+    discharge_bias_hours: List[int] = field(default_factory=lambda: [10, 11, 12, 13, 14])
+
+    enabled: bool = True
+
+    @property
+    def los_mean_mins(self) -> float:
+        """Return LoS in minutes for simulation."""
+        return self.los_mean_hours * 60
+
+
+# ============== Phase 8: Theatre Configuration ==============
+
+@dataclass
+class TheatreConfig:
+    """Operating theatre configuration (Phase 8).
+
+    Models theatre capacity with session-based scheduling.
+    Emergency surgery competes with elective lists.
+
+    Attributes:
+        n_tables: Number of operating tables.
+        session_duration_mins: Duration of a theatre session (list).
+        sessions_per_day: Number of sessions per day (AM + PM).
+        procedure_time_mean: Average surgery duration in minutes.
+        procedure_time_cv: Variability in procedure time.
+        to_itu_prob: Probability patient goes to ITU post-op.
+        to_ward_prob: Probability patient goes to Ward post-op.
+        emergency_priority_boost: Priority adjustment for emergency cases.
+        enabled: Whether Theatre is modelled.
+    """
+    n_tables: int = 2
+    session_duration_mins: int = 240  # 4 hours per session
+    sessions_per_day: int = 2  # AM and PM lists
+
+    procedure_time_mean: float = 90.0  # Average surgery duration
+    procedure_time_cv: float = 0.5
+
+    # Post-op destination probabilities (must sum to 1.0)
+    to_itu_prob: float = 0.25
+    to_ward_prob: float = 0.75
+
+    # Emergency priority
+    emergency_priority_boost: int = 10
+
+    enabled: bool = True
+
+    def __post_init__(self):
+        # Validate probabilities sum to 1.0
+        total = self.to_itu_prob + self.to_ward_prob
+        if abs(total - 1.0) > 0.001:
+            raise ValueError(
+                f"Theatre post-op probabilities must sum to 1.0, got {total}"
+            )
+
+    @property
+    def daily_capacity_hours(self) -> float:
+        """Total theatre hours available per day."""
+        return self.n_tables * self.session_duration_mins * self.sessions_per_day / 60
+
+    @property
+    def estimated_daily_cases(self) -> float:
+        """Estimated number of cases per day."""
+        total_mins = self.n_tables * self.session_duration_mins * self.sessions_per_day
+        return total_mins / self.procedure_time_mean
 
 
 # Day type multipliers for arrival pattern adjustments (Phase 6)
@@ -63,19 +236,25 @@ DEMAND_LEVEL_MULTIPLIERS: Dict[str, float] = {
 
 @dataclass
 class DetailedArrivalConfig:
-    """Per-hour, per-mode arrival counts (Phase 6).
+    """Per-hour, per-mode arrival counts (Phase 6, extended Phase 8).
 
     Used with ArrivalModel.DETAILED for full control over arrivals.
     Allows specifying exact numbers of ambulances, helicopters, and
-    walk-ins for each hour of the day.
+    walk-ins for each hour of the configured period.
+
+    Phase 8: Supports extended hours (12-72h) with pattern repetition
+    for runs longer than configured period.
     """
+    # Number of hours configured (12, 24, 36, 48, 60, 72)
+    hours_configured: int = 24
+
     # hourly_counts[hour][mode] = count
     hourly_counts: Dict[int, Dict[ArrivalMode, int]] = field(default_factory=dict)
 
     def __post_init__(self):
         # Initialize with zeros if empty
         if not self.hourly_counts:
-            for hour in range(24):
+            for hour in range(self.hours_configured):
                 self.hourly_counts[hour] = {
                     ArrivalMode.AMBULANCE: 0,
                     ArrivalMode.HELICOPTER: 0,
@@ -83,8 +262,19 @@ class DetailedArrivalConfig:
                 }
 
     def get_rate(self, hour: int, mode: ArrivalMode) -> float:
-        """Get arrival rate for specific hour and mode."""
-        return float(self.hourly_counts.get(hour, {}).get(mode, 0))
+        """Get arrival rate for specific hour and mode, with wraparound.
+
+        For hours beyond hours_configured, the pattern repeats from hour 0.
+
+        Args:
+            hour: Hour of simulation (can exceed hours_configured).
+            mode: Arrival mode (AMBULANCE, HELICOPTER, SELF_PRESENTATION).
+
+        Returns:
+            Arrival rate for that hour and mode.
+        """
+        effective_hour = hour % self.hours_configured
+        return float(self.hourly_counts.get(effective_hour, {}).get(mode, 0))
 
     def set_rate(self, hour: int, mode: ArrivalMode, count: int) -> None:
         """Set arrival count for specific hour and mode."""
@@ -95,6 +285,34 @@ class DetailedArrivalConfig:
                 ArrivalMode.SELF_PRESENTATION: 0,
             }
         self.hourly_counts[hour][mode] = count
+
+    def expand_to_hours(self, target_hours: int) -> 'DetailedArrivalConfig':
+        """Create new config expanded/repeated to target hours.
+
+        Args:
+            target_hours: Target number of hours for the new config.
+
+        Returns:
+            New DetailedArrivalConfig with pattern repeated to fill target_hours.
+        """
+        new_config = DetailedArrivalConfig(hours_configured=target_hours)
+
+        for hour in range(target_hours):
+            source_hour = hour % self.hours_configured
+            new_config.hourly_counts[hour] = self.hourly_counts.get(source_hour, {
+                ArrivalMode.AMBULANCE: 0,
+                ArrivalMode.HELICOPTER: 0,
+                ArrivalMode.SELF_PRESENTATION: 0,
+            }).copy()
+
+        return new_config
+
+    def total_arrivals(self) -> int:
+        """Calculate total arrivals across all hours and modes."""
+        total = 0
+        for hour_counts in self.hourly_counts.values():
+            total += sum(hour_counts.values())
+        return total
 
 
 @dataclass
@@ -395,9 +613,17 @@ class FullScenario:
     # Transfer configuration (Phase 7)
     transfer_config: Optional[TransferConfig] = None
 
+    # Phase 8: Detailed downstream configs (optional - override node_configs)
+    itu_config: Optional[ITUConfig] = None
+    ward_config: Optional[WardConfig] = None
+    theatre_config: Optional[TheatreConfig] = None
+
     # RNG for diagnostics (Phase 7) - created in __post_init__
     rng_diagnostics: Optional[np.random.Generator] = None
     rng_transfer: Optional[np.random.Generator] = None
+    rng_itu: Optional[np.random.Generator] = None  # Phase 8
+    rng_ward: Optional[np.random.Generator] = None  # Phase 8
+    rng_theatre: Optional[np.random.Generator] = None  # Phase 8
 
     def __post_init__(self) -> None:
         """Initialize separate RNG streams and validate parameters."""
@@ -420,6 +646,17 @@ class FullScenario:
         self.rng_handover = np.random.default_rng(self.random_seed + 16)  # Phase 5b
         self.rng_diagnostics = np.random.default_rng(self.random_seed + 17)  # Phase 7
         self.rng_transfer = np.random.default_rng(self.random_seed + 18)  # Phase 7
+        self.rng_itu = np.random.default_rng(self.random_seed + 19)  # Phase 8
+        self.rng_ward = np.random.default_rng(self.random_seed + 20)  # Phase 8
+        self.rng_theatre = np.random.default_rng(self.random_seed + 21)  # Phase 8
+
+        # Initialize default Phase 8 configs if not provided
+        if self.itu_config is None:
+            self.itu_config = ITUConfig()
+        if self.ward_config is None:
+            self.ward_config = WardConfig()
+        if self.theatre_config is None:
+            self.theatre_config = TheatreConfig()
 
         # Initialize default routing if not provided
         if not self.routing:
@@ -740,4 +977,8 @@ class FullScenario:
             # Phase 7: Copy diagnostic and transfer configs
             diagnostic_configs=self.diagnostic_configs,
             transfer_config=self.transfer_config,
+            # Phase 8: Copy downstream configs
+            itu_config=self.itu_config,
+            ward_config=self.ward_config,
+            theatre_config=self.theatre_config,
         )

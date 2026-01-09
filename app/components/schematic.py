@@ -1,15 +1,22 @@
-"""Capacity schematic diagram generator (Phase 5f).
+"""Capacity schematic diagram generator (Phase 5f, Enhanced Phase 8).
 
 Generates Graphviz DOT strings for visualizing hospital capacity
-and patient flow.
+and patient flow, including feedback loops showing blocking cascades.
 """
 
 from faer.core.scenario import FullScenario
-from faer.core.entities import NodeType
+from faer.core.entities import NodeType, DiagnosticType
 
 
 def build_capacity_graph(scenario: FullScenario) -> str:
-    """Generate Graphviz DOT string for capacity schematic.
+    """Generate comprehensive Graphviz DOT string for capacity schematic.
+
+    Phase 8: Enhanced schematic showing:
+    - All resources with capacities
+    - Patient flow paths
+    - Feedback loops (blocking cascades)
+    - Diagnostics loop
+    - Transfer pathway
 
     Args:
         scenario: Current scenario configuration
@@ -25,73 +32,166 @@ def build_capacity_graph(scenario: FullScenario) -> str:
     n_ed = scenario.n_ed_bays
 
     # Get downstream capacities from node_configs
-    n_surgery = scenario.node_configs.get(NodeType.SURGERY, type('', (), {'capacity': 2})()).capacity
-    n_itu = scenario.node_configs.get(NodeType.ITU, type('', (), {'capacity': 6})()).capacity
-    n_ward = scenario.node_configs.get(NodeType.WARD, type('', (), {'capacity': 30})()).capacity
+    surgery_config = scenario.node_configs.get(NodeType.SURGERY)
+    n_surgery = surgery_config.capacity if surgery_config else 2
+
+    itu_config = scenario.node_configs.get(NodeType.ITU)
+    n_itu = itu_config.capacity if itu_config else 6
+
+    ward_config = scenario.node_configs.get(NodeType.WARD)
+    n_ward = ward_config.capacity if ward_config else 30
+
+    # Get diagnostic capacities (Phase 7)
+    ct_config = scenario.diagnostic_configs.get(DiagnosticType.CT_SCAN)
+    n_ct = ct_config.capacity if ct_config and ct_config.enabled else 2
+
+    xray_config = scenario.diagnostic_configs.get(DiagnosticType.XRAY)
+    n_xray = xray_config.capacity if xray_config and xray_config.enabled else 3
+
+    bloods_config = scenario.diagnostic_configs.get(DiagnosticType.BLOODS)
+    n_bloods = bloods_config.capacity if bloods_config and bloods_config.enabled else 5
+
+    # Get transfer capacities (Phase 7)
+    transfer_config = scenario.transfer_config
+    n_transfer_amb = transfer_config.n_transfer_ambulances if transfer_config else 2
+    n_transfer_heli = transfer_config.n_transfer_helicopters if transfer_config else 1
 
     # Build DOT string
     dot = f'''
-    digraph HospitalFlow {{
+    digraph HospitalSystem {{
         rankdir=LR;
-        bgcolor="transparent";
+        bgcolor="white";
+        fontname="Arial";
+        label="Hospital Patient Flow & Feedback Loops";
+        labelloc="t";
+        fontsize=16;
 
-        // Node styling
-        node [shape=box, style="rounded,filled", fontname="Arial", fontsize=11];
+        // Graph settings
+        node [fontname="Arial", fontsize=10];
+        edge [fontname="Arial", fontsize=9];
 
-        // Fleet (yellow)
-        subgraph cluster_fleet {{
-            label="Fleet";
-            style="dashed";
-            color="gray";
+        // ==================== ARRIVAL ====================
+        subgraph cluster_arrival {{
+            label="Arrival";
+            style="rounded,filled";
+            fillcolor="#FFF8DC";
 
-            Ambulances [label="Ambulances\\n{n_amb} vehicles", fillcolor="#FFE4B5"];
-            Helicopters [label="Helicopters\\n{n_heli} vehicles", fillcolor="#FFE4B5"];
+            Ambulances [label="Ambulances\\n{n_amb} vehicles", shape=box, style="rounded,filled", fillcolor="#FFE4B5"];
+            Helicopters [label="Helicopters\\n{n_heli} vehicles", shape=box, style="rounded,filled", fillcolor="#FFE4B5"];
+            WalkIn [label="Walk-in\\nUnlimited", shape=box, style="rounded,filled", fillcolor="#E8E8E8"];
         }}
 
-        // Walk-in (no resource constraint)
-        WalkIn [label="Walk-in\\nUnlimited", fillcolor="#E8E8E8"];
+        // ==================== HANDOVER ====================
+        Handover [label="Handover Bay\\n{n_handover} bays", shape=box, style="rounded,filled", fillcolor="#FFDAB9"];
 
-        // Handover (orange - bottleneck potential)
-        Handover [label="Handover\\n{n_handover} bays", fillcolor="#FFDAB9"];
-
-        // ED (green)
+        // ==================== EMERGENCY DEPT ====================
         subgraph cluster_ed {{
-            label="Emergency Dept";
-            style="dashed";
-            color="gray";
+            label="Emergency Department";
+            style="rounded,filled";
+            fillcolor="#F0FFF0";
 
-            Triage [label="Triage\\n{n_triage} clinicians", fillcolor="#90EE90"];
-            ED [label="ED Bays\\n{n_ed} beds", fillcolor="#98FB98"];
+            Triage [label="Triage\\n{n_triage} clinicians", shape=box, style="rounded,filled", fillcolor="#90EE90"];
+            ED [label="ED Bays\\n{n_ed} beds", shape=box, style="rounded,filled", fillcolor="#98FB98"];
         }}
 
-        // Downstream (blue)
-        subgraph cluster_downstream {{
+        // ==================== DIAGNOSTICS ====================
+        subgraph cluster_diag {{
+            label="Diagnostics";
+            style="rounded,filled";
+            fillcolor="#F5F0FF";
+
+            CT [label="CT Scanner\\n{n_ct} scanners", shape=box, style="rounded,filled", fillcolor="#DDA0DD"];
+            Xray [label="X-ray\\n{n_xray} rooms", shape=box, style="rounded,filled", fillcolor="#DDA0DD"];
+            Bloods [label="Bloods\\n{n_bloods} phleb", shape=box, style="rounded,filled", fillcolor="#DDA0DD"];
+        }}
+
+        // ==================== TRANSFER ====================
+        subgraph cluster_transfer {{
+            label="Specialist Transfer";
+            style="rounded,filled";
+            fillcolor="#FFF0F5";
+
+            TransferAmb [label="Transfer Amb\\n{n_transfer_amb} vehicles", shape=box, style="rounded,filled", fillcolor="#FFB6C1"];
+            TransferHeli [label="Air Ambulance\\n{n_transfer_heli} aircraft", shape=box, style="rounded,filled", fillcolor="#FFB6C1"];
+            SpecialistCentre [label="Specialist\\nCentre", shape=oval, style="filled", fillcolor="#FF69B4"];
+        }}
+
+        // ==================== SURGICAL ====================
+        subgraph cluster_surgical {{
+            label="Surgical";
+            style="rounded,filled";
+            fillcolor="#F0F8FF";
+
+            Theatre [label="Theatre\\n{n_surgery} tables", shape=box, style="rounded,filled", fillcolor="#87CEEB"];
+        }}
+
+        // ==================== INPATIENT ====================
+        subgraph cluster_inpatient {{
             label="Inpatient";
-            style="dashed";
-            color="gray";
+            style="rounded,filled";
+            fillcolor="#F0FFFF";
 
-            Surgery [label="Surgery\\n{n_surgery} tables", fillcolor="#ADD8E6"];
-            ITU [label="ITU\\n{n_itu} beds", fillcolor="#87CEEB"];
-            Ward [label="Ward\\n{n_ward} beds", fillcolor="#B0E0E6"];
+            ITU [label="ITU\\n{n_itu} beds", shape=box, style="rounded,filled", fillcolor="#ADD8E6"];
+            Ward [label="Ward\\n{n_ward} beds", shape=box, style="rounded,filled", fillcolor="#B0E0E6"];
         }}
 
-        // Exit
-        Exit [label="Exit", shape=oval, fillcolor="#D3D3D3"];
+        // ==================== EXIT ====================
+        Exit [label="Exit /\\nDischarge", shape=oval, style="filled", fillcolor="#D3D3D3"];
 
-        // Edges with labels
-        Ambulances -> Handover [label="P1-P4"];
-        Helicopters -> Handover [label="P1-P2"];
-        WalkIn -> Triage [label="P3-P4"];
-        Handover -> Triage;
-        Triage -> ED [label="All"];
-        ED -> Surgery [label="Surgical", style="dashed"];
-        ED -> ITU [label="Critical", style="dashed"];
-        ED -> Ward [label="Admit"];
-        ED -> Exit [label="Discharge"];
-        Surgery -> ITU [style="dotted"];
-        Surgery -> Ward;
-        ITU -> Ward [label="Step-down"];
-        Ward -> Exit;
+        // ==================== FORWARD FLOW (solid blue) ====================
+        Ambulances -> Handover [color="blue", penwidth=2];
+        Helicopters -> Handover [color="blue", penwidth=2];
+        WalkIn -> Triage [color="blue", penwidth=2];
+        Handover -> Triage [color="blue", penwidth=2];
+        Triage -> ED [color="blue", penwidth=2];
+
+        // ED to downstream
+        ED -> Theatre [label="Surgical", color="blue"];
+        ED -> ITU [label="Critical", color="blue"];
+        ED -> Ward [label="Admit", color="blue"];
+        ED -> Exit [label="Discharge", color="blue"];
+
+        // Surgical pathway
+        Theatre -> ITU [label="Post-op critical", color="blue"];
+        Theatre -> Ward [label="Post-op", color="blue"];
+
+        // ITU step-down
+        ITU -> Ward [label="Step-down", color="blue"];
+
+        // Ward discharge
+        Ward -> Exit [label="Discharge", color="blue", penwidth=2];
+
+        // ==================== DIAGNOSTICS LOOP (purple dashed) ====================
+        ED -> CT [label="scan", style="dashed", color="purple"];
+        CT -> ED [label="return", style="dashed", color="purple"];
+        ED -> Xray [label="scan", style="dashed", color="purple"];
+        Xray -> ED [label="return", style="dashed", color="purple"];
+        ED -> Bloods [label="test", style="dashed", color="purple"];
+        Bloods -> ED [label="return", style="dashed", color="purple"];
+
+        // ==================== TRANSFER PATHWAY (pink) ====================
+        ED -> TransferAmb [label="critical\\ntransfer", color="deeppink", style="dashed"];
+        ED -> TransferHeli [label="air\\ntransfer", color="deeppink", style="dashed"];
+        TransferAmb -> SpecialistCentre [color="deeppink"];
+        TransferHeli -> SpecialistCentre [color="deeppink"];
+
+        // ==================== FEEDBACK LOOPS (red, thick, labeled) ====================
+        // These show blocking/backpressure
+        Ward -> ED [label="BLOCKED:\\nED boarding", color="red", style="bold", penwidth=2, constraint=false];
+        ITU -> Theatre [label="BLOCKED:\\nSurgery delay", color="red", style="bold", penwidth=2, constraint=false];
+        ED -> Handover [label="BLOCKED:\\nHandover delay", color="red", style="bold", penwidth=2, constraint=false];
+
+        // ==================== LEGEND ====================
+        subgraph cluster_legend {{
+            label="Legend";
+            style="rounded";
+            fontsize=10;
+
+            leg1 [label="Blue: Patient Flow", shape=plaintext];
+            leg2 [label="Purple: Diagnostics Loop", shape=plaintext];
+            leg3 [label="Pink: Transfer Out", shape=plaintext];
+            leg4 [label="Red: BLOCKING", shape=plaintext];
+        }}
     }}
     '''
 

@@ -13,13 +13,15 @@ if str(app_dir) not in sys.path:
 
 from faer.core.scenario import (
     FullScenario, DiagnosticConfig, DAY_TYPE_MULTIPLIERS, DetailedArrivalConfig,
+    RunLengthPreset, ITUConfig, WardConfig, TheatreConfig,
 )
 from faer.core.arrivals import load_default_profile
 from faer.core.entities import (
     DiagnosticType, Priority, ArrivalModel, DayType, ArrivalMode,
 )
 import plotly.express as px
-from components.schematic import build_simple_schematic
+from components.schematic import build_simple_schematic, build_capacity_graph
+from components.scenario_summary import render_scenario_summary
 
 st.set_page_config(page_title="Scenario - FAER", page_icon="📊", layout="wide")
 
@@ -33,9 +35,9 @@ if "n_reps" not in st.session_state:
 
 scenario = st.session_state.scenario
 
-# Tabs for different configuration sections
-tab_time, tab_resources, tab_acuity, tab_arrivals, tab_service, tab_experiment = st.tabs([
-    "Timing", "Resources", "Acuity Mix", "Arrivals", "Service Times", "Experiment"
+# Tabs for different configuration sections (Phase 8: added Downstream)
+tab_time, tab_resources, tab_downstream, tab_acuity, tab_arrivals, tab_service, tab_experiment = st.tabs([
+    "Timing", "Resources", "Downstream", "Acuity Mix", "Arrivals", "Service Times", "Experiment"
 ])
 
 # ===== TIMING TAB =====
@@ -45,22 +47,43 @@ with tab_time:
     col1, col2 = st.columns(2)
 
     with col1:
-        run_hours = st.slider(
-            "Run length (hours)",
-            min_value=1,
-            max_value=36,
-            value=int(scenario.run_length / 60),
-            help="How long to simulate (excluding warm-up)",
-        )
+        # Phase 8: Use RunLengthPreset for extended run lengths
+        st.subheader("Run Length")
+
+        use_preset = st.toggle("Use preset durations", value=True, key="use_preset")
+
+        if use_preset:
+            run_preset = st.selectbox(
+                "Select duration",
+                options=[p for p in RunLengthPreset],
+                format_func=lambda p: p.label,
+                index=1,  # Default to 24h
+                help="Preset run lengths for common scenarios"
+            )
+            run_hours = run_preset.hours
+            st.caption(f"Duration: {run_hours}h = {run_hours/24:.1f} days")
+        else:
+            run_hours = st.slider(
+                "Run length (hours)",
+                min_value=1,
+                max_value=72,
+                value=int(scenario.run_length / 60),
+                help="How long to simulate (excluding warm-up)",
+            )
+            if run_hours > 24:
+                st.caption(f"Duration: {run_hours}h = {run_hours/24:.1f} days")
 
     with col2:
+        st.subheader("Warm-up")
         warm_up_hours = st.slider(
             "Warm-up period (hours)",
             min_value=0,
-            max_value=4,
+            max_value=8,
             value=int(scenario.warm_up / 60),
             help="Initial period excluded from statistics",
         )
+        if run_hours >= 24:
+            st.info("For runs >= 24h, consider 2-4h warm-up to fill downstream beds.")
 
     # Arrival profile
     st.subheader("Arrival Profile")
@@ -294,6 +317,201 @@ with tab_resources:
         st.graphviz_chart(schematic_dot, use_container_width=True)
     except Exception as e:
         st.warning(f"Could not render schematic: {e}")
+
+
+# ===== DOWNSTREAM TAB (Phase 8) =====
+with tab_downstream:
+    st.header("Downstream Capacity")
+
+    st.markdown("""
+    **Phase 8: Inpatient Capacity**
+
+    Configure capacity for Theatre, ITU, and Ward beds. These downstream
+    resources affect ED flow through blocking/boarding when full.
+    """)
+
+    # Theatre Configuration
+    st.subheader("Theatre / Surgery")
+    theatre_col1, theatre_col2, theatre_col3 = st.columns(3)
+
+    with theatre_col1:
+        n_theatre_tables = st.number_input(
+            "Theatre Tables",
+            min_value=1,
+            max_value=10,
+            value=scenario.theatre_config.n_tables if scenario.theatre_config else 2,
+            help="Number of operating tables",
+        )
+
+    with theatre_col2:
+        theatre_session_mins = st.number_input(
+            "Session Duration (min)",
+            min_value=60,
+            max_value=480,
+            value=scenario.theatre_config.session_duration_mins if scenario.theatre_config else 240,
+            help="Duration of a single theatre session",
+        )
+
+    with theatre_col3:
+        theatre_procedure_mean = st.number_input(
+            "Procedure Time (min)",
+            min_value=30,
+            max_value=240,
+            value=int(scenario.theatre_config.procedure_time_mean) if scenario.theatre_config else 90,
+            help="Average surgery duration",
+        )
+
+    # Theatre routing
+    theatre_route_col1, theatre_route_col2 = st.columns(2)
+    with theatre_route_col1:
+        theatre_to_itu_prob = st.slider(
+            "% to ITU post-op",
+            min_value=0,
+            max_value=50,
+            value=int((scenario.theatre_config.to_itu_prob if scenario.theatre_config else 0.25) * 100),
+            help="Proportion needing ITU after surgery",
+        )
+    with theatre_route_col2:
+        theatre_to_ward_prob = 100 - theatre_to_itu_prob
+        st.metric("% to Ward post-op", f"{theatre_to_ward_prob}%")
+
+    st.markdown("---")
+
+    # ITU Configuration
+    st.subheader("ITU / Critical Care")
+    itu_col1, itu_col2, itu_col3 = st.columns(3)
+
+    with itu_col1:
+        n_itu_beds = st.number_input(
+            "ITU Beds",
+            min_value=1,
+            max_value=30,
+            value=scenario.itu_config.capacity if scenario.itu_config else 6,
+            help="Number of intensive care beds",
+        )
+
+    with itu_col2:
+        itu_los_hours = st.number_input(
+            "Average LoS (hours)",
+            min_value=12,
+            max_value=168,
+            value=int(scenario.itu_config.los_mean_hours) if scenario.itu_config else 48,
+            help="Average length of stay in ITU",
+        )
+
+    with itu_col3:
+        itu_los_cv = st.slider(
+            "LoS Variability (CV)",
+            min_value=0.3,
+            max_value=1.5,
+            value=scenario.itu_config.los_cv if scenario.itu_config else 0.8,
+            step=0.1,
+            help="Coefficient of variation for LoS",
+        )
+
+    # ITU outcomes
+    with st.expander("ITU Outcomes"):
+        itu_out_col1, itu_out_col2, itu_out_col3 = st.columns(3)
+
+        with itu_out_col1:
+            itu_stepdown_prob = st.slider(
+                "% Step-down to Ward",
+                min_value=50,
+                max_value=95,
+                value=int((scenario.itu_config.step_down_to_ward_prob if scenario.itu_config else 0.85) * 100),
+                help="Proportion stepping down to Ward",
+            )
+
+        with itu_out_col2:
+            itu_death_prob = st.slider(
+                "% Mortality",
+                min_value=1,
+                max_value=30,
+                value=int((scenario.itu_config.death_prob if scenario.itu_config else 0.10) * 100),
+                help="In-ITU mortality rate",
+            )
+
+        with itu_out_col3:
+            itu_direct_discharge = 100 - itu_stepdown_prob - itu_death_prob
+            if itu_direct_discharge < 0:
+                st.error("Probabilities exceed 100%!")
+                itu_direct_discharge = 0
+            else:
+                st.metric("% Direct Discharge", f"{itu_direct_discharge}%")
+
+    st.markdown("---")
+
+    # Ward Configuration
+    st.subheader("Ward Beds")
+    ward_col1, ward_col2, ward_col3 = st.columns(3)
+
+    with ward_col1:
+        n_ward_beds = st.number_input(
+            "Ward Beds",
+            min_value=10,
+            max_value=200,
+            value=scenario.ward_config.capacity if scenario.ward_config else 30,
+            help="Number of general ward beds",
+        )
+
+    with ward_col2:
+        ward_los_hours = st.number_input(
+            "Average LoS (hours)",
+            min_value=24,
+            max_value=336,
+            value=int(scenario.ward_config.los_mean_hours) if scenario.ward_config else 72,
+            help="Average length of stay on Ward",
+        )
+
+    with ward_col3:
+        ward_los_cv = st.slider(
+            "LoS Variability (CV)",
+            min_value=0.5,
+            max_value=2.0,
+            value=scenario.ward_config.los_cv if scenario.ward_config else 1.0,
+            step=0.1,
+            help="High CV reflects mix of simple/complex cases",
+        )
+
+    ward_turnaround = st.number_input(
+        "Bed Turnaround (min)",
+        min_value=15,
+        max_value=60,
+        value=int(scenario.ward_config.turnaround_mins) if scenario.ward_config else 30,
+        help="Cleaning/prep time between patients",
+    )
+
+    # Capacity Summary
+    st.markdown("---")
+    st.subheader("Downstream Summary")
+
+    cap_col1, cap_col2, cap_col3, cap_col4 = st.columns(4)
+
+    with cap_col1:
+        st.metric("Theatre Tables", n_theatre_tables)
+        daily_cases = n_theatre_tables * 2 * (theatre_session_mins / theatre_procedure_mean)
+        st.caption(f"~{daily_cases:.0f} cases/day")
+
+    with cap_col2:
+        st.metric("ITU Beds", n_itu_beds)
+        itu_turnover = 24 / itu_los_hours
+        st.caption(f"Turnover: {itu_turnover:.2f}/day")
+
+    with cap_col3:
+        st.metric("Ward Beds", n_ward_beds)
+        ward_turnover = 24 / ward_los_hours
+        st.caption(f"Turnover: {ward_turnover:.2f}/day")
+
+    with cap_col4:
+        total_downstream = n_itu_beds + n_ward_beds
+        st.metric("Total Inpatient", total_downstream)
+
+    # Flow check
+    if n_itu_beds < 2:
+        st.warning("Very low ITU capacity may cause severe blocking.")
+    if n_ward_beds < 20:
+        st.warning("Low ward capacity may cause ED boarding.")
+
 
 # ===== ACUITY MIX TAB =====
 with tab_acuity:
@@ -847,6 +1065,28 @@ if st.button("Save Scenario", type="primary", use_container_width=True):
             arrival_model=ArrivalModel(arrival_model_value),  # Phase 7d
             day_type=DayType(day_type_value),  # Phase 7d
             detailed_arrivals=st.session_state.get('detailed_arrivals'),  # Phase 7d
+            # Phase 8: Downstream configs
+            theatre_config=TheatreConfig(
+                n_tables=n_theatre_tables,
+                session_duration_mins=theatre_session_mins,
+                procedure_time_mean=float(theatre_procedure_mean),
+                to_itu_prob=theatre_to_itu_prob / 100.0,
+                to_ward_prob=theatre_to_ward_prob / 100.0,
+            ),
+            itu_config=ITUConfig(
+                capacity=n_itu_beds,
+                los_mean_hours=float(itu_los_hours),
+                los_cv=itu_los_cv,
+                step_down_to_ward_prob=itu_stepdown_prob / 100.0,
+                death_prob=itu_death_prob / 100.0,
+                direct_discharge_prob=itu_direct_discharge / 100.0,
+            ),
+            ward_config=WardConfig(
+                capacity=n_ward_beds,
+                los_mean_hours=float(ward_los_hours),
+                los_cv=ward_los_cv,
+                turnaround_mins=float(ward_turnaround),
+            ),
         )
         st.session_state.n_reps = n_reps
         st.session_state.run_complete = False
