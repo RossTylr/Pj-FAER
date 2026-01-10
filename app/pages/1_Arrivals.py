@@ -26,11 +26,11 @@ from faer.core.scenario import (
 
 st.set_page_config(
     page_title="Arrivals",
-    page_icon="🚑",
+    page_icon="",
     layout="wide"
 )
 
-st.title("🚑 Arrivals Configuration")
+st.title("Arrivals Configuration")
 
 st.info("""
 Configure how patients arrive at the Emergency Department.
@@ -91,7 +91,7 @@ init_session_defaults()
 # ============================================================
 # SECTION 1: EMERGENCY SERVICES
 # ============================================================
-st.header("🚨 Emergency Services")
+st.header("Emergency Services")
 
 st.markdown("""
 Configure the emergency service fleet that brings patients to the ED.
@@ -105,7 +105,7 @@ col_amb, col_heli, col_walk = st.columns(3)
 
 # ---------------- AMBULANCE ----------------
 with col_amb:
-    st.subheader("🚑 Ambulance Service")
+    st.subheader("Ambulance Service")
 
     with st.container(border=True):
         # Fleet size - maps to FullScenario.n_ambulances
@@ -168,7 +168,7 @@ with col_amb:
 
 # ---------------- HELICOPTER (HEMS) ----------------
 with col_heli:
-    st.subheader("🚁 HEMS / Air Ambulance")
+    st.subheader("HEMS / Air Ambulance")
 
     with st.container(border=True):
         # Fleet size - maps to FullScenario.n_helicopters
@@ -224,7 +224,7 @@ with col_heli:
 
 # ---------------- WALK-IN ----------------
 with col_walk:
-    st.subheader("🚶 Self-Presentation (Walk-in)")
+    st.subheader("Self-Presentation (Walk-in)")
 
     with st.container(border=True):
         st.markdown("**No fleet constraint**")
@@ -274,7 +274,7 @@ with col_walk:
 # SECTION 2: HANDOVER GATE
 # ============================================================
 st.markdown("---")
-st.header("🚪 Handover Gate")
+st.header("Handover Gate")
 
 st.markdown("""
 Ambulance and HEMS crews hand over patients at the handover bay.
@@ -351,7 +351,7 @@ else:
 # SECTION 3: SESSION STATE SUMMARY
 # ============================================================
 st.markdown("---")
-st.header("📋 Emergency Services Summary")
+st.header("Emergency Services Summary")
 
 with st.container(border=True):
     summary_data = {
@@ -410,7 +410,7 @@ st.info("""
 # SECTION 4: ARRIVAL PROFILES (Phase 8a-2 content)
 # ============================================================
 st.markdown("---")
-st.header("📊 Arrival Profiles")
+st.header("Arrival Profiles")
 
 st.markdown("""
 Configure **when** patients arrive throughout the day.
@@ -496,7 +496,7 @@ if arrival_model == 'simple':
 
     with col1:
         daily_ambulance = st.number_input(
-            "🚑 Ambulance Arrivals/Day",
+            "Ambulance Arrivals/Day",
             min_value=0,
             max_value=300,
             value=st.session_state.daily_ambulance,
@@ -512,7 +512,7 @@ if arrival_model == 'simple':
 
     with col2:
         daily_helicopter = st.number_input(
-            "🚁 HEMS Arrivals/Day",
+            "HEMS Arrivals/Day",
             min_value=0,
             max_value=30,
             value=st.session_state.daily_helicopter,
@@ -531,7 +531,7 @@ if arrival_model == 'simple':
 
     with col3:
         daily_walkin = st.number_input(
-            "🚶 Walk-in Arrivals/Day",
+            "Walk-in Arrivals/Day",
             min_value=0,
             max_value=400,
             value=st.session_state.daily_walkin,
@@ -678,7 +678,7 @@ elif arrival_model == 'profile_24h':
 
         with c1:
             amb_mult = st.slider(
-                "🚑 Ambulance Scale",
+                "Ambulance Scale",
                 0.0, 2.0,
                 float(st.session_state.ambulance_rate_multiplier),
                 0.1,
@@ -688,7 +688,7 @@ elif arrival_model == 'profile_24h':
 
         with c2:
             heli_mult = st.slider(
-                "🚁 HEMS Scale",
+                "HEMS Scale",
                 0.0, 2.0,
                 float(st.session_state.helicopter_rate_multiplier),
                 0.1,
@@ -698,7 +698,7 @@ elif arrival_model == 'profile_24h':
 
         with c3:
             walk_mult = st.slider(
-                "🚶 Walk-in Scale",
+                "Walk-in Scale",
                 0.0, 2.0,
                 float(st.session_state.walkin_rate_multiplier),
                 0.1,
@@ -813,9 +813,9 @@ elif arrival_model == 'detailed':
         height=min(500, 35 * min(len(hours), 15) + 50),
         column_config={
             'Hour': st.column_config.TextColumn('Hour', disabled=True, width='small'),
-            'Ambulance': st.column_config.NumberColumn('🚑 Amb', min_value=0, max_value=50, width='small'),
-            'HEMS': st.column_config.NumberColumn('🚁 HEMS', min_value=0, max_value=10, width='small'),
-            'Walk-in': st.column_config.NumberColumn('🚶 Walk', min_value=0, max_value=50, width='small'),
+            'Ambulance': st.column_config.NumberColumn('Amb', min_value=0, max_value=50, width='small'),
+            'HEMS': st.column_config.NumberColumn('HEMS', min_value=0, max_value=10, width='small'),
+            'Walk-in': st.column_config.NumberColumn('Walk', min_value=0, max_value=50, width='small'),
         }
     )
 
@@ -840,9 +840,9 @@ elif arrival_model == 'detailed':
 
     st.markdown("**Totals**")
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🚑 Ambulance", int(total_amb))
-    col2.metric("🚁 HEMS", int(total_heli))
-    col3.metric("🚶 Walk-in", int(total_walk))
+    col1.metric("Ambulance", int(total_amb))
+    col2.metric("HEMS", int(total_heli))
+    col3.metric("Walk-in", int(total_walk))
     col4.metric("Total", int(total_all))
 
     # Projected totals for longer runs
@@ -1030,7 +1030,7 @@ with st.container(border=True):
 # SECTION 6: ARRIVAL PROFILE SUMMARY
 # ============================================================
 st.markdown("---")
-st.header("📋 Arrival Profile Summary")
+st.header("Arrival Profile Summary")
 
 with st.container(border=True):
     summary_data = {

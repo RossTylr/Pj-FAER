@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Pj FAER** (Flow Analysis for Emergency Response) is a discrete-event simulation platform for hospital patient flow, built with SimPy and Streamlit. This project simulates A&E → Resus → disposition pathways over 1-36 hour horizons.
+**Pj FAER** (Framework for Acute and Emergency Resources) is a discrete-event simulation platform for hospital patient flow, built with SimPy and Streamlit. This project simulates A&E to Resus to disposition pathways over 1-36 hour horizons.
 
 ## Tech Stack
 

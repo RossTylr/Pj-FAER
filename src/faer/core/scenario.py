@@ -387,6 +387,121 @@ class DiagnosticConfig:
     probability_by_priority: Dict[Priority, float] = field(default_factory=dict)
 
 
+# ============== Phase 10: Aeromedical Evacuation ==============
+
+@dataclass
+class HEMSConfig:
+    """HEMS (Helicopter Emergency Medical Service) configuration (Phase 10).
+
+    HEMS provides flexible, rapid evacuation for critically ill patients.
+    Unlike fixed-wing, HEMS can typically operate on-demand within
+    daylight hours (weather permitting).
+
+    Attributes:
+        enabled: Whether HEMS evacuation is available.
+        slots_per_day: Number of HEMS evacuations available per day.
+        operating_start_hour: First hour HEMS can operate (e.g., 7 = 07:00).
+        operating_end_hour: Last hour HEMS can launch (e.g., 21 = 21:00).
+        stabilisation_mins: (min, max) clinical preparation time.
+        transfer_to_helipad_mins: (min, max) transfer time to helipad.
+        flight_duration_mins: (min, max) flight duration.
+    """
+    enabled: bool = True
+    slots_per_day: int = 6
+    operating_start_hour: int = 7   # 07:00
+    operating_end_hour: int = 21    # 21:00 (last launch)
+    stabilisation_mins: tuple = (30.0, 120.0)  # 30min - 2h
+    transfer_to_helipad_mins: tuple = (15.0, 45.0)
+    flight_duration_mins: tuple = (15.0, 60.0)
+
+
+@dataclass
+class FixedWingConfig:
+    """Fixed-wing aeromedical evacuation configuration (Phase 10).
+
+    Slots are configured per 12-hour segment, allowing modelling of:
+    - Single daily departure (1 slot in segment 0, 0 in segment 1)
+    - Twice daily (1 slot each segment)
+    - Variable patterns (more slots on weekdays)
+
+    Pattern repeats after configured segments (default: 2 segments = 1 day).
+    Maximum 10 segments = 5 days.
+
+    Attributes:
+        enabled: Whether fixed-wing evacuation is available.
+        slots_per_segment: List of slots per 12h segment (max 10 segments = 5 days).
+        departure_hour_in_segment: Hour within segment for departure (0-11).
+        cutoff_hours_before: Hours before departure patient must be ready.
+        stabilisation_mins: (min, max) clinical preparation time.
+        transport_to_airfield_mins: (min, max) transfer to airfield.
+        flight_duration_mins: (min, max) flight duration.
+    """
+    enabled: bool = False
+    slots_per_segment: List[int] = field(default_factory=lambda: [1, 0])
+    departure_hour_in_segment: int = 2  # 2h into segment (02:00 or 14:00)
+    cutoff_hours_before: int = 4  # Must be ready 4h before departure
+    stabilisation_mins: tuple = (120.0, 240.0)  # 2-4 hours
+    transport_to_airfield_mins: tuple = (30.0, 90.0)  # 30-90 min
+    flight_duration_mins: tuple = (60.0, 180.0)  # 1-3 hours
+
+
+@dataclass
+class MissedSlotConfig:
+    """Configuration for handling missed aeromedical slots (Phase 10).
+
+    CLINICAL CONTEXT:
+    When a patient misses their scheduled evacuation slot (e.g., aircraft
+    departed before patient ready, or no slots remaining today), they must
+    wait for the next available slot.
+
+    During this wait:
+    - Patient HOLDS their ward bed (cannot be discharged, cannot free bed)
+    - Bed state is BLOCKED (not OCCUPIED) - blocked by downstream constraint
+    - This creates upstream blocking (new admissions wait for ward beds)
+    - The "missed slot cascade" can significantly impact hospital flow
+
+    RE-STABILISATION:
+    In most cases, a patient who was stabilised for evacuation remains stable.
+    Re-stabilisation is typically only needed if:
+    - Significant time has passed (>24h)
+    - Patient's condition has changed
+    - Different aircraft type with different requirements
+
+    Default: No re-stabilisation (patient waits in stable condition)
+
+    Attributes:
+        requires_restabilisation: Whether patient needs re-prep after missing slot.
+        restabilisation_factor: Fraction of original stabilisation time if needed.
+        max_wait_before_restab_hours: Auto re-stabilise after this time (None to disable).
+    """
+    requires_restabilisation: bool = False
+    restabilisation_factor: float = 0.3  # 30% of original stabilisation time
+    max_wait_before_restab_hours: Optional[float] = 24.0
+
+
+@dataclass
+class AeromedConfig:
+    """Aeromedical evacuation configuration (Phase 10).
+
+    Models patient evacuation via HEMS (helicopter) or fixed-wing aircraft
+    to specialist receiving facilities.
+
+    Attributes:
+        enabled: Whether aeromedical evacuation is modelled.
+        p1_aeromed_probability: Probability that a P1/Resus patient requires aeromed.
+        fixedwing_proportion: Of aeromed patients, proportion going fixed-wing (vs HEMS).
+        hems: HEMS sub-configuration.
+        fixedwing: Fixed-wing sub-configuration.
+        missed_slot: Missed slot behaviour configuration.
+    """
+    enabled: bool = False
+    p1_aeromed_probability: float = 0.05  # 5% of P1s need aeromed
+    fixedwing_proportion: float = 0.3  # 30% fixed-wing, 70% HEMS
+    hems: HEMSConfig = field(default_factory=HEMSConfig)
+    fixedwing: FixedWingConfig = field(default_factory=FixedWingConfig)
+    missed_slot: MissedSlotConfig = field(default_factory=MissedSlotConfig)
+
+
 @dataclass
 class TransferConfig:
     """Configuration for inter-facility transfers (Phase 7).
@@ -618,12 +733,20 @@ class FullScenario:
     ward_config: Optional[WardConfig] = None
     theatre_config: Optional[TheatreConfig] = None
 
+    # Phase 9: Downstream simulation controls
+    downstream_enabled: bool = False  # Enable Theatre/ITU/Ward resource consumption
+    release_stable_to_wait: bool = False  # P3/P4 ward-bound patients release ED bay early
+
+    # Phase 10: Aeromedical evacuation configuration
+    aeromed_config: Optional[AeromedConfig] = None
+
     # RNG for diagnostics (Phase 7) - created in __post_init__
     rng_diagnostics: Optional[np.random.Generator] = None
     rng_transfer: Optional[np.random.Generator] = None
     rng_itu: Optional[np.random.Generator] = None  # Phase 8
     rng_ward: Optional[np.random.Generator] = None  # Phase 8
     rng_theatre: Optional[np.random.Generator] = None  # Phase 8
+    rng_aeromed: Optional[np.random.Generator] = None  # Phase 10
 
     def __post_init__(self) -> None:
         """Initialize separate RNG streams and validate parameters."""
@@ -649,6 +772,7 @@ class FullScenario:
         self.rng_itu = np.random.default_rng(self.random_seed + 19)  # Phase 8
         self.rng_ward = np.random.default_rng(self.random_seed + 20)  # Phase 8
         self.rng_theatre = np.random.default_rng(self.random_seed + 21)  # Phase 8
+        self.rng_aeromed = np.random.default_rng(self.random_seed + 22)  # Phase 10
 
         # Initialize default Phase 8 configs if not provided
         if self.itu_config is None:
@@ -678,6 +802,10 @@ class FullScenario:
         # Initialize default transfer config if not provided (Phase 7)
         if self.transfer_config is None:
             self.transfer_config = TransferConfig()
+
+        # Initialize default aeromed config if not provided (Phase 10)
+        if self.aeromed_config is None:
+            self.aeromed_config = AeromedConfig()
 
     def _default_node_configs(self) -> dict:
         """Default node configurations.
@@ -981,4 +1109,9 @@ class FullScenario:
             itu_config=self.itu_config,
             ward_config=self.ward_config,
             theatre_config=self.theatre_config,
+            # Phase 9: Copy downstream controls
+            downstream_enabled=self.downstream_enabled,
+            release_stable_to_wait=self.release_stable_to_wait,
+            # Phase 10: Copy aeromed config
+            aeromed_config=self.aeromed_config,
         )

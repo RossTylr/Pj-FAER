@@ -14,6 +14,10 @@ Integration:
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy import stats
 from typing import Dict
 
 # Import from existing codebase
@@ -28,11 +32,11 @@ from faer.core.scenario import (
 
 st.set_page_config(
     page_title="Resources",
-    page_icon="🏥",
+    page_icon="",
     layout="wide"
 )
 
-st.title("🏥 Resources Configuration")
+st.title("Resources Configuration")
 
 st.info("""
 Configure all hospital resources - **capacity AND service times together**.
@@ -260,7 +264,7 @@ Diagnostic services requested during ED stay.
 
 # CT Scanner
 with st.container(border=True):
-    st.subheader("🔬 CT Scanner")
+    st.subheader("CT Scanner")
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -311,7 +315,7 @@ with st.container(border=True):
 
 # X-ray
 with st.container(border=True):
-    st.subheader("📷 X-ray")
+    st.subheader("X-ray")
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -361,7 +365,7 @@ with st.container(border=True):
 
 # Bloods
 with st.container(border=True):
-    st.subheader("🩸 Bloods / Pathology")
+    st.subheader("Bloods / Pathology")
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -641,10 +645,148 @@ with st.container(border=True):
     st.caption(f"Ward LoS: ~{ward_los:.0f}h ({ward_los/24:.1f} days)")
 
 # ============================================================
+# DISTRIBUTION PREVIEW (Optional)
+# ============================================================
+st.markdown("---")
+
+with st.expander("Distribution Preview - Visualize Length of Stay Variability", expanded=False):
+    st.markdown("""
+    This section shows how the **Coefficient of Variation (CV)** affects the distribution
+    of Length of Stay times for ITU and Ward. Higher CV means more variability - some
+    patients have very short stays while others stay much longer than the mean.
+    """)
+
+    # Current settings readback
+    st.subheader("Current Settings")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**ITU Length of Stay**")
+        st.write(f"- Mean: **{st.session_state.itu_los_hours_mean:.0f} hours** ({st.session_state.itu_los_hours_mean/24:.1f} days)")
+        st.write(f"- CV: **{st.session_state.itu_los_cv:.2f}**")
+
+    with col2:
+        st.markdown("**Ward Length of Stay**")
+        st.write(f"- Mean: **{st.session_state.ward_los_hours_mean:.0f} hours** ({st.session_state.ward_los_hours_mean/24:.1f} days)")
+        st.write(f"- CV: **{st.session_state.ward_los_cv:.2f}**")
+
+    # Generate distribution button for performance
+    if st.button("Generate Distribution Preview", key="btn_generate_dist"):
+        st.session_state.show_dist_preview = True
+
+    if st.session_state.get('show_dist_preview', False):
+        # Helper function to compute lognormal parameters from mean and CV
+        def lognormal_params(mean: float, cv: float):
+            """Convert mean and CV to lognormal mu (scale) and sigma (shape)."""
+            variance = (cv * mean) ** 2
+            sigma_sq = np.log(1 + variance / mean**2)
+            sigma = np.sqrt(sigma_sq)
+            mu = np.log(mean) - sigma_sq / 2
+            return mu, sigma
+
+        # Create subplots
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=("ITU Length of Stay", "Ward Length of Stay")
+        )
+
+        # ITU distribution
+        itu_mean = st.session_state.itu_los_hours_mean
+        itu_cv = st.session_state.itu_los_cv
+        itu_mu, itu_sigma = lognormal_params(itu_mean, itu_cv)
+
+        # Generate x values (0 to 3x mean to show tail)
+        itu_x = np.linspace(0.1, itu_mean * 4, 500)
+        itu_y = stats.lognorm.pdf(itu_x, s=itu_sigma, scale=np.exp(itu_mu))
+
+        fig.add_trace(
+            go.Scatter(x=itu_x, y=itu_y, mode='lines', name='ITU LoS',
+                      fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.3)',
+                      line=dict(color='rgb(31, 119, 180)', width=2)),
+            row=1, col=1
+        )
+
+        # Add percentile markers for ITU
+        itu_p50 = stats.lognorm.ppf(0.50, s=itu_sigma, scale=np.exp(itu_mu))
+        itu_p95 = stats.lognorm.ppf(0.95, s=itu_sigma, scale=np.exp(itu_mu))
+        itu_p99 = stats.lognorm.ppf(0.99, s=itu_sigma, scale=np.exp(itu_mu))
+
+        fig.add_vline(x=itu_p50, line_dash="dash", line_color="green", row=1, col=1)
+        fig.add_vline(x=itu_p95, line_dash="dash", line_color="orange", row=1, col=1)
+
+        # Ward distribution
+        ward_mean = st.session_state.ward_los_hours_mean
+        ward_cv = st.session_state.ward_los_cv
+        ward_mu, ward_sigma = lognormal_params(ward_mean, ward_cv)
+
+        ward_x = np.linspace(0.1, ward_mean * 4, 500)
+        ward_y = stats.lognorm.pdf(ward_x, s=ward_sigma, scale=np.exp(ward_mu))
+
+        fig.add_trace(
+            go.Scatter(x=ward_x, y=ward_y, mode='lines', name='Ward LoS',
+                      fill='tozeroy', fillcolor='rgba(255, 127, 14, 0.3)',
+                      line=dict(color='rgb(255, 127, 14)', width=2)),
+            row=1, col=2
+        )
+
+        # Add percentile markers for Ward
+        ward_p50 = stats.lognorm.ppf(0.50, s=ward_sigma, scale=np.exp(ward_mu))
+        ward_p95 = stats.lognorm.ppf(0.95, s=ward_sigma, scale=np.exp(ward_mu))
+        ward_p99 = stats.lognorm.ppf(0.99, s=ward_sigma, scale=np.exp(ward_mu))
+
+        fig.add_vline(x=ward_p50, line_dash="dash", line_color="green", row=1, col=2)
+        fig.add_vline(x=ward_p95, line_dash="dash", line_color="orange", row=1, col=2)
+
+        # Update layout
+        fig.update_xaxes(title_text="Hours", row=1, col=1)
+        fig.update_xaxes(title_text="Hours", row=1, col=2)
+        fig.update_yaxes(title_text="Probability Density", row=1, col=1)
+        fig.update_yaxes(title_text="Probability Density", row=1, col=2)
+
+        fig.update_layout(
+            height=400,
+            showlegend=False,
+            margin=dict(t=40, b=40, l=40, r=40)
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Percentile interpretation
+        st.markdown("---")
+        st.subheader("Percentile Interpretation")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**ITU**")
+            st.write(f"- Median (P50): **{itu_p50:.0f}h** ({itu_p50/24:.1f} days)")
+            st.write(f"- 95th percentile: **{itu_p95:.0f}h** ({itu_p95/24:.1f} days)")
+            st.write(f"- 99th percentile: **{itu_p99:.0f}h** ({itu_p99/24:.1f} days)")
+            st.caption(f"5% of patients stay longer than {itu_p95:.0f} hours")
+
+        with col2:
+            st.markdown("**Ward**")
+            st.write(f"- Median (P50): **{ward_p50:.0f}h** ({ward_p50/24:.1f} days)")
+            st.write(f"- 95th percentile: **{ward_p95:.0f}h** ({ward_p95/24:.1f} days)")
+            st.write(f"- 99th percentile: **{ward_p99:.0f}h** ({ward_p99/24:.1f} days)")
+            st.caption(f"5% of patients stay longer than {ward_p95:.0f} hours")
+
+        # Legend explanation
+        st.markdown("""
+        **Chart Legend:**
+        - Green dashed line = Median (50th percentile)
+        - Orange dashed line = 95th percentile
+
+        **Why this matters:** High CV values create a "long tail" where a small proportion
+        of patients have very extended stays. These patients can block beds and cause
+        upstream congestion, even when average utilization looks manageable.
+        """)
+
+# ============================================================
 # SECTION 7: RESOURCE SUMMARY
 # ============================================================
 st.markdown("---")
-st.header("📋 Resource Summary")
+st.header("Resource Summary")
 
 with st.container(border=True):
     summary_data = {

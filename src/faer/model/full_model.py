@@ -42,6 +42,7 @@ class AEResources:
     Phase 5c: Fleet resources for ambulances and helicopters.
     Phase 7: Diagnostic resources (CT, X-ray, Bloods).
     Phase 7: Transfer resources (land ambulance, helicopter).
+    Phase 9: Downstream resources (Theatre, ITU, Ward).
     """
 
     triage: simpy.PriorityResource
@@ -56,6 +57,14 @@ class AEResources:
     # Phase 7: Transfer resources
     transfer_ambulances: Optional[simpy.Resource] = None
     transfer_helicopters: Optional[simpy.Resource] = None
+
+    # Phase 9: Downstream resources
+    theatre_tables: Optional[simpy.PriorityResource] = None
+    itu_beds: Optional[simpy.Resource] = None
+    ward_beds: Optional[simpy.Resource] = None
+
+    # Phase 10: Aeromedical resources
+    hems_slots: Optional[simpy.Resource] = None
 
 
 @dataclass
@@ -107,6 +116,28 @@ class FullResultsCollector:
     transfer_total_times: Dict[TransferType, List[float]] = field(default_factory=dict)
     # Count of transfers by destination
     transfers_by_destination: Dict[TransferDestination, int] = field(default_factory=dict)
+
+    # Phase 9: Downstream tracking
+    # Wait times for downstream resources
+    theatre_waits: List[float] = field(default_factory=list)
+    itu_waits: List[float] = field(default_factory=list)
+    ward_waits: List[float] = field(default_factory=list)
+    # Durations (length of stay)
+    theatre_durations: List[float] = field(default_factory=list)
+    itu_durations: List[float] = field(default_factory=list)
+    ward_durations: List[float] = field(default_factory=list)
+    # Counts
+    theatre_admissions: int = 0
+    itu_admissions: int = 0
+    ward_admissions: int = 0
+    # ED bay early release count
+    ed_bay_early_releases: int = 0
+
+    # Phase 10: Aeromedical tracking
+    aeromed_hems_count: int = 0
+    aeromed_fixedwing_count: int = 0
+    aeromed_slot_waits: List[float] = field(default_factory=list)
+    aeromed_slots_missed: int = 0
 
     def __post_init__(self):
         for resource in ["triage", "ed_bays", "handover", "surgery", "itu", "ward",
@@ -190,6 +221,48 @@ class FullResultsCollector:
     def record_transfer_destination(self, destination: TransferDestination) -> None:
         """Record transfer destination (Phase 7)."""
         self.transfers_by_destination[destination] = self.transfers_by_destination.get(destination, 0) + 1
+
+    def record_theatre_admission(self, wait_time: float, duration: float) -> None:
+        """Record theatre/surgery admission (Phase 9)."""
+        self.theatre_admissions += 1
+        self.theatre_waits.append(wait_time)
+        self.theatre_durations.append(duration)
+
+    def record_itu_admission(self, wait_time: float, duration: float) -> None:
+        """Record ITU admission (Phase 9)."""
+        self.itu_admissions += 1
+        self.itu_waits.append(wait_time)
+        self.itu_durations.append(duration)
+
+    def record_ward_admission(self, wait_time: float, duration: float) -> None:
+        """Record ward admission (Phase 9)."""
+        self.ward_admissions += 1
+        self.ward_waits.append(wait_time)
+        self.ward_durations.append(duration)
+
+    def record_ed_bay_early_release(self) -> None:
+        """Record early ED bay release (Phase 9)."""
+        self.ed_bay_early_releases += 1
+
+    def record_aeromed_evacuation(
+        self,
+        patient: Patient,
+        aeromed_type: str,
+        slot_wait: float,
+        slot_missed: bool = False,
+    ) -> None:
+        """Record aeromedical evacuation (Phase 10)."""
+        if aeromed_type == "HEMS":
+            self.aeromed_hems_count += 1
+        else:
+            self.aeromed_fixedwing_count += 1
+        self.aeromed_slot_waits.append(slot_wait)
+        if slot_missed:
+            self.aeromed_slots_missed += 1
+
+    def record_missed_aeromed_slot(self, patient: Patient, time: float) -> None:
+        """Record a missed aeromed slot (Phase 10)."""
+        self.aeromed_slots_missed += 1
 
     def compute_metrics(self, run_length: float, scenario: FullScenario) -> Dict:
         """Compute all KPIs from collected data.
@@ -419,6 +492,81 @@ class FullResultsCollector:
         metrics["total_transfers"] = total_transfers
         for dest in TransferDestination:
             metrics[f"transfers_to_{dest.name}"] = self.transfers_by_destination.get(dest, 0)
+
+        # Phase 9: Downstream process metrics
+        # Theatre metrics
+        metrics["theatre_admissions"] = self.theatre_admissions
+        if self.theatre_waits:
+            metrics["mean_theatre_wait"] = float(np.mean(self.theatre_waits))
+            metrics["p95_theatre_wait"] = float(np.percentile(self.theatre_waits, 95))
+            metrics["max_theatre_wait"] = float(np.max(self.theatre_waits))
+        else:
+            metrics["mean_theatre_wait"] = 0.0
+            metrics["p95_theatre_wait"] = 0.0
+            metrics["max_theatre_wait"] = 0.0
+
+        if self.theatre_durations:
+            metrics["mean_theatre_duration"] = float(np.mean(self.theatre_durations))
+        else:
+            metrics["mean_theatre_duration"] = 0.0
+
+        # ITU metrics
+        metrics["itu_admissions"] = self.itu_admissions
+        if self.itu_waits:
+            metrics["mean_itu_wait"] = float(np.mean(self.itu_waits))
+            metrics["p95_itu_wait"] = float(np.percentile(self.itu_waits, 95))
+            metrics["max_itu_wait"] = float(np.max(self.itu_waits))
+        else:
+            metrics["mean_itu_wait"] = 0.0
+            metrics["p95_itu_wait"] = 0.0
+            metrics["max_itu_wait"] = 0.0
+
+        if self.itu_durations:
+            metrics["mean_itu_duration"] = float(np.mean(self.itu_durations))
+        else:
+            metrics["mean_itu_duration"] = 0.0
+
+        # Ward metrics
+        metrics["ward_admissions"] = self.ward_admissions
+        if self.ward_waits:
+            metrics["mean_ward_wait"] = float(np.mean(self.ward_waits))
+            metrics["p95_ward_wait"] = float(np.percentile(self.ward_waits, 95))
+            metrics["max_ward_wait"] = float(np.max(self.ward_waits))
+        else:
+            metrics["mean_ward_wait"] = 0.0
+            metrics["p95_ward_wait"] = 0.0
+            metrics["max_ward_wait"] = 0.0
+
+        if self.ward_durations:
+            metrics["mean_ward_duration"] = float(np.mean(self.ward_durations))
+        else:
+            metrics["mean_ward_duration"] = 0.0
+
+        # ED bay early release tracking
+        metrics["ed_bay_early_releases"] = self.ed_bay_early_releases
+        if total_arrivals > 0:
+            metrics["p_early_release"] = self.ed_bay_early_releases / total_arrivals
+        else:
+            metrics["p_early_release"] = 0.0
+
+        # Phase 10: Aeromedical metrics
+        metrics["aeromed_hems_count"] = self.aeromed_hems_count
+        metrics["aeromed_fixedwing_count"] = self.aeromed_fixedwing_count
+        metrics["aeromed_total"] = self.aeromed_hems_count + self.aeromed_fixedwing_count
+        metrics["aeromed_slots_missed"] = self.aeromed_slots_missed
+
+        if self.aeromed_slot_waits:
+            metrics["mean_aeromed_slot_wait"] = float(np.mean(self.aeromed_slot_waits))
+            metrics["max_aeromed_slot_wait"] = float(np.max(self.aeromed_slot_waits))
+        else:
+            metrics["mean_aeromed_slot_wait"] = 0.0
+            metrics["max_aeromed_slot_wait"] = 0.0
+
+        # Ward bed-days blocked by aeromed wait
+        if self.aeromed_slot_waits:
+            metrics["ward_bed_days_blocked_aeromed"] = sum(self.aeromed_slot_waits) / 1440
+        else:
+            metrics["ward_bed_days_blocked_aeromed"] = 0.0
 
         return metrics
 
@@ -682,13 +830,657 @@ def boarding_process(
     patient: Patient,
     scenario: FullScenario,
 ) -> Generator[simpy.Event, None, None]:
-    """Boarding process for admitted patients awaiting bed."""
+    """Boarding process for admitted patients awaiting bed (legacy)."""
     boarding_start = env.now
 
     duration = sample_lognormal(scenario.rng_boarding, scenario.boarding_mean, scenario.boarding_cv)
     yield env.timeout(duration)
 
     patient.record_boarding(boarding_start, env.now)
+
+
+# =============================================================================
+# Phase 9: Downstream Processes (Theatre, ITU, Ward)
+# =============================================================================
+
+
+def can_release_ed_bay_early(patient: Patient, next_node: NodeType) -> bool:
+    """Determine if patient can release ED bay early (Phase 9).
+
+    Only stable patients (P3/P4) going to Ward can release early.
+    P1/P2 patients and those needing ITU/Surgery always hold ED bay.
+
+    Args:
+        patient: The patient being routed.
+        next_node: The downstream destination.
+
+    Returns:
+        True if patient can release ED bay before downstream bed acquired.
+    """
+    # Discharge always releases
+    if next_node == NodeType.EXIT:
+        return True
+
+    # Only P3/P4 eligible for early release
+    if patient.priority in (Priority.P1_IMMEDIATE, Priority.P2_VERY_URGENT):
+        return False
+
+    # Only Ward destination eligible (not ITU, not Surgery)
+    if next_node != NodeType.WARD:
+        return False
+
+    return True
+
+
+def theatre_process(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: 'AEResources',
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+    ed_bay_req: Optional[Any] = None,
+) -> Generator[simpy.Event, None, None]:
+    """Theatre/surgery process (Phase 9).
+
+    Patient HOLDS upstream resource (ED bay) until theatre table acquired.
+    After theatre, routes to ITU or Ward based on post-op probabilities.
+
+    Args:
+        env: SimPy environment.
+        patient: The patient undergoing surgery.
+        resources: Container of simulation resources.
+        scenario: Scenario configuration.
+        results: Results collector for metrics.
+        ed_bay_req: The ED bay request to release once theatre acquired.
+
+    Yields:
+        SimPy events for the theatre process.
+    """
+    config = scenario.theatre_config
+    wait_start = env.now
+
+    # Request theatre table (priority-based)
+    theatre_req = resources.theatre_tables.request(priority=patient.priority.value)
+    yield theatre_req
+
+    # Log theatre resource acquisition
+    results.record_resource_state("surgery", env.now, resources.theatre_tables.count)
+
+    surgery_start = env.now
+    wait_time = surgery_start - wait_start
+
+    # Release ED bay now that we have theatre
+    if ed_bay_req is not None:
+        resources.ed_bays.release(ed_bay_req)
+        patient.record_ed_bay_release(env.now, early=False)
+
+    # Procedure time (lognormal distribution)
+    procedure_mins = sample_lognormal(
+        scenario.rng_theatre,
+        config.procedure_time_mean,
+        config.procedure_time_cv,
+    )
+    yield env.timeout(procedure_mins)
+
+    surgery_end = env.now
+    patient.record_surgery(wait_start, surgery_start, surgery_end)
+    results.record_theatre_admission(wait_time, surgery_end - surgery_start)
+
+    # Determine post-op destination
+    if scenario.rng_theatre.random() < config.to_itu_prob:
+        # Route to ITU - hold theatre until ITU acquired
+        yield from itu_process(env, patient, resources, scenario, results, theatre_req)
+    else:
+        # Route to Ward - hold theatre until ward acquired
+        yield from ward_process(env, patient, resources, scenario, results, theatre_req)
+
+    # Theatre table released after downstream routing
+
+
+def itu_process(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: 'AEResources',
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+    upstream_req: Optional[Any] = None,
+) -> Generator[simpy.Event, None, None]:
+    """ITU process with step-down routing (Phase 9).
+
+    Patient HOLDS upstream resource until ITU bed acquired.
+    After ITU stay, routes to Ward (step-down) or discharge.
+
+    Args:
+        env: SimPy environment.
+        patient: The patient needing ITU.
+        resources: Container of simulation resources.
+        scenario: Scenario configuration.
+        results: Results collector for metrics.
+        upstream_req: The upstream resource request to release once ITU acquired.
+            Could be ED bay, theatre table, etc.
+
+    Yields:
+        SimPy events for the ITU process.
+    """
+    config = scenario.itu_config
+    wait_start = env.now
+
+    # Request ITU bed
+    itu_req = resources.itu_beds.request()
+    yield itu_req
+
+    # Log ITU resource acquisition
+    results.record_resource_state("itu", env.now, resources.itu_beds.count)
+
+    itu_start = env.now
+    wait_time = itu_start - wait_start
+
+    # Release upstream resource now that we have ITU bed
+    if upstream_req is not None:
+        # Release the upstream resource (theatre table) and log state change
+        resources.theatre_tables.release(upstream_req)
+        results.record_resource_state("surgery", env.now, resources.theatre_tables.count)
+
+    # ITU length of stay
+    los_mins = sample_lognormal(
+        scenario.rng_itu,
+        config.los_mean_mins,
+        config.los_cv,
+    )
+    yield env.timeout(los_mins)
+
+    itu_end = env.now
+    patient.record_itu(wait_start, itu_start, itu_end)
+    results.record_itu_admission(wait_time, itu_end - itu_start)
+
+    # Determine outcome (step-down, discharge, or death)
+    outcome_roll = scenario.rng_itu.random()
+
+    if outcome_roll < config.death_prob:
+        # Patient died - bed released, no further routing
+        resources.itu_beds.release(itu_req)
+        results.record_resource_state("itu", env.now, resources.itu_beds.count)
+        patient.disposition = Disposition.LEFT  # Or create DEATH disposition
+        return
+
+    if outcome_roll < config.death_prob + config.direct_discharge_prob:
+        # Direct discharge from ITU (rare)
+        resources.itu_beds.release(itu_req)
+        results.record_resource_state("itu", env.now, resources.itu_beds.count)
+        patient.disposition = Disposition.DISCHARGE
+        return
+
+    # Step-down to Ward - HOLD ITU bed until ward bed acquired
+    yield from ward_process(env, patient, resources, scenario, results, itu_req)
+
+    # ITU bed released after ward_process acquires ward bed
+
+
+def _complete_theatre_stay(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: 'AEResources',
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+    theatre_req: Optional[Any] = None,
+) -> Generator[simpy.Event, None, None]:
+    """Complete theatre stay after resource already acquired (Phase 9).
+
+    Used when theatre_req was acquired in patient_journey to enable blocking cascade.
+    This function handles the actual procedure and downstream routing.
+
+    Args:
+        theatre_req: The theatre table request to release after downstream routing.
+    """
+    config = scenario.theatre_config
+    surgery_start = env.now
+
+    # Procedure time
+    procedure_mins = sample_lognormal(
+        scenario.rng_theatre,
+        config.procedure_time_mean,
+        config.procedure_time_cv,
+    )
+    yield env.timeout(procedure_mins)
+
+    surgery_end = env.now
+    # Note: wait_start was when we requested the resource, which we don't have here
+    # So we record with surgery_start as wait_start (no wait recorded)
+    patient.record_surgery(surgery_start, surgery_start, surgery_end)
+    results.record_theatre_admission(0.0, surgery_end - surgery_start)
+
+    # Determine post-op destination and route - pass theatre_req as upstream
+    if scenario.rng_theatre.random() < config.to_itu_prob:
+        yield from itu_process(env, patient, resources, scenario, results, upstream_req=theatre_req)
+    else:
+        yield from ward_process(env, patient, resources, scenario, results, upstream_req=theatre_req)
+
+
+def _complete_itu_stay(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: 'AEResources',
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+    itu_req: Optional[Any] = None,
+) -> Generator[simpy.Event, None, None]:
+    """Complete ITU stay after resource already acquired (Phase 9).
+
+    Args:
+        itu_req: The ITU bed request to release after ward routing or on exit.
+    """
+    config = scenario.itu_config
+    itu_start = env.now
+
+    # ITU length of stay
+    los_mins = sample_lognormal(
+        scenario.rng_itu,
+        config.los_mean_mins,
+        config.los_cv,
+    )
+    yield env.timeout(los_mins)
+
+    itu_end = env.now
+    patient.record_itu(itu_start, itu_start, itu_end)
+    results.record_itu_admission(0.0, itu_end - itu_start)
+
+    # Determine outcome
+    outcome_roll = scenario.rng_itu.random()
+
+    if outcome_roll < config.death_prob:
+        # Release ITU bed on death
+        if itu_req is not None:
+            resources.itu_beds.release(itu_req)
+            results.record_resource_state("itu", env.now, resources.itu_beds.count)
+        patient.disposition = Disposition.LEFT
+        return
+
+    if outcome_roll < config.death_prob + config.direct_discharge_prob:
+        # Release ITU bed on direct discharge
+        if itu_req is not None:
+            resources.itu_beds.release(itu_req)
+            results.record_resource_state("itu", env.now, resources.itu_beds.count)
+        patient.disposition = Disposition.DISCHARGE
+        return
+
+    # Step-down to Ward - pass itu_req as upstream to be released when ward acquired
+    yield from ward_process(env, patient, resources, scenario, results, upstream_req=itu_req)
+
+
+def _complete_ward_stay(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: 'AEResources',
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+    ward_req: Optional[Any] = None,
+) -> Generator[simpy.Event, None, None]:
+    """Complete ward stay after resource already acquired (Phase 9).
+
+    Args:
+        ward_req: The ward bed request to release on discharge.
+    """
+    config = scenario.ward_config
+    ward_start = env.now
+
+    # Ward length of stay
+    los_mins = sample_lognormal(
+        scenario.rng_ward,
+        config.los_mean_mins,
+        config.los_cv,
+    )
+    yield env.timeout(los_mins)
+
+    ward_end = env.now
+    patient.record_ward(ward_start, ward_start, ward_end)
+    results.record_ward_admission(0.0, ward_end - ward_start)
+
+    # Release ward bed
+    if ward_req is not None:
+        resources.ward_beds.release(ward_req)
+        results.record_resource_state("ward", env.now, resources.ward_beds.count)
+
+    patient.disposition = Disposition.ADMIT_WARD
+
+
+def ward_process(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: 'AEResources',
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+    upstream_req: Optional[Any] = None,
+) -> Generator[simpy.Event, None, None]:
+    """Ward process (Phase 9).
+
+    Patient HOLDS upstream resource until ward bed acquired.
+    After ward stay, patient is discharged.
+
+    Args:
+        env: SimPy environment.
+        patient: The patient needing ward bed.
+        resources: Container of simulation resources.
+        scenario: Scenario configuration.
+        results: Results collector for metrics.
+        upstream_req: The upstream resource request to release once ward acquired.
+
+    Yields:
+        SimPy events for the ward process.
+    """
+    config = scenario.ward_config
+    wait_start = env.now
+
+    # Request ward bed
+    ward_req = resources.ward_beds.request()
+    yield ward_req
+
+    # Log ward resource acquisition
+    results.record_resource_state("ward", env.now, resources.ward_beds.count)
+
+    ward_start = env.now
+    wait_time = ward_start - wait_start
+
+    # Release upstream resource now that we have ward bed
+    if upstream_req is not None:
+        # Determine which resource to release and log appropriately
+        if upstream_req.resource is resources.theatre_tables:
+            resources.theatre_tables.release(upstream_req)
+            results.record_resource_state("surgery", env.now, resources.theatre_tables.count)
+        elif upstream_req.resource is resources.itu_beds:
+            resources.itu_beds.release(upstream_req)
+            results.record_resource_state("itu", env.now, resources.itu_beds.count)
+
+    # Ward length of stay
+    los_mins = sample_lognormal(
+        scenario.rng_ward,
+        config.los_mean_mins,
+        config.los_cv,
+    )
+    yield env.timeout(los_mins)
+
+    ward_end = env.now
+    patient.record_ward(wait_start, ward_start, ward_end)
+    results.record_ward_admission(wait_time, ward_end - ward_start)
+
+    # Phase 10: Determine discharge pathway
+    # Patient HOLDS ward bed during aeromed process (BLOCKED state)
+    discharge_pathway = determine_discharge_pathway(patient, scenario)
+
+    if discharge_pathway == "AEROMED_HEMS":
+        # Patient needs HEMS evacuation - holds bed throughout
+        yield from hems_evacuation_process(env, patient, resources, scenario, results)
+
+    elif discharge_pathway == "AEROMED_FIXED_WING":
+        # Patient needs fixed-wing evacuation - holds bed throughout
+        yield from fixedwing_evacuation_process(env, patient, resources, scenario, results)
+
+    # Release ward bed
+    resources.ward_beds.release(ward_req)
+    results.record_resource_state("ward", env.now, resources.ward_beds.count)
+
+    # Patient discharged
+    patient.disposition = Disposition.ADMIT_WARD
+
+
+# =============================================================================
+# Phase 10: Aeromedical Evacuation Processes
+# =============================================================================
+
+
+def determine_discharge_pathway(patient: Patient, scenario: FullScenario) -> str:
+    """Determine discharge pathway based on patient characteristics (Phase 10).
+
+    Only P1 (Immediate/Resus) patients are eligible for aeromed evacuation.
+    Of those selected, a proportion go fixed-wing vs HEMS.
+
+    Args:
+        patient: The patient being discharged.
+        scenario: Scenario configuration with aeromed settings.
+
+    Returns:
+        Discharge pathway: "STANDARD", "AEROMED_HEMS", or "AEROMED_FIXED_WING".
+    """
+    aeromed_config = scenario.aeromed_config
+
+    if not aeromed_config or not aeromed_config.enabled:
+        return "STANDARD"
+
+    # Only P1 patients eligible for aeromed
+    if patient.priority != Priority.P1_IMMEDIATE:
+        return "STANDARD"
+
+    # Roll for aeromed requirement
+    if scenario.rng_aeromed.random() < aeromed_config.p1_aeromed_probability:
+        patient.requires_aeromed = True
+
+        # Split between fixed-wing and HEMS
+        if scenario.rng_aeromed.random() < aeromed_config.fixedwing_proportion:
+            return "AEROMED_FIXED_WING"
+        else:
+            return "AEROMED_HEMS"
+
+    return "STANDARD"
+
+
+def hems_evacuation_process(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: 'AEResources',
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+) -> Generator[simpy.Event, None, None]:
+    """HEMS evacuation process (Phase 10).
+
+    HEMS provides flexible, on-demand evacuation within operating hours.
+    Patient HOLDS their ward bed throughout this process (BLOCKED state).
+
+    Timeline:
+    1. Clinical stabilisation (30-120 mins)
+    2. Wait for HEMS slot (if outside operating hours or slots full)
+    3. Transfer to helipad (15-45 mins)
+    4. Flight (15-60 mins)
+    5. Ward bed released on departure
+
+    Args:
+        env: SimPy environment.
+        patient: The patient being evacuated.
+        resources: Container of simulation resources.
+        scenario: Scenario configuration.
+        results: Results collector for metrics.
+
+    Yields:
+        SimPy events for the evacuation process.
+    """
+    config = scenario.aeromed_config.hems
+
+    # Stabilisation
+    stabilisation_start = env.now
+    stab_mins = scenario.rng_aeromed.uniform(*config.stabilisation_mins)
+    yield env.timeout(stab_mins)
+    stabilisation_end = env.now
+
+    total_slot_wait = 0.0
+
+    # Check if within operating hours
+    current_hour = (env.now / 60) % 24
+
+    if current_hour < config.operating_start_hour or current_hour >= config.operating_end_hour:
+        # Wait until operating hours
+        if current_hour >= config.operating_end_hour:
+            # Wait until next morning
+            day_start_mins = (env.now // 1440) * 1440  # Start of current day
+            next_morning = day_start_mins + 1440 + config.operating_start_hour * 60
+            wait_mins = next_morning - env.now
+        else:
+            # Wait until start hour today
+            day_start_mins = (env.now // 1440) * 1440
+            today_start = day_start_mins + config.operating_start_hour * 60
+            wait_mins = today_start - env.now
+
+        total_slot_wait += wait_mins
+        yield env.timeout(wait_mins)
+
+    # Request HEMS slot (if resource exists)
+    if resources.hems_slots is not None:
+        slot_wait_start = env.now
+        with resources.hems_slots.request() as slot_req:
+            yield slot_req
+            total_slot_wait += env.now - slot_wait_start
+
+            # Transfer to helipad
+            transfer_mins = scenario.rng_aeromed.uniform(*config.transfer_to_helipad_mins)
+            yield env.timeout(transfer_mins)
+
+            # Flight
+            flight_mins = scenario.rng_aeromed.uniform(*config.flight_duration_mins)
+            yield env.timeout(flight_mins)
+    else:
+        # No slot resource - just do transfer and flight
+        transfer_mins = scenario.rng_aeromed.uniform(*config.transfer_to_helipad_mins)
+        yield env.timeout(transfer_mins)
+
+        flight_mins = scenario.rng_aeromed.uniform(*config.flight_duration_mins)
+        yield env.timeout(flight_mins)
+
+    departure_time = env.now
+
+    # Record evacuation
+    patient.record_aeromed_evacuation(
+        aeromed_type="HEMS",
+        stabilisation_start=stabilisation_start,
+        stabilisation_end=stabilisation_end,
+        wait_for_slot=total_slot_wait,
+        departure=departure_time,
+        slot_missed=False,
+    )
+
+    results.record_aeromed_evacuation(patient, "HEMS", total_slot_wait)
+
+
+def find_next_fixedwing_slot(current_time: float, config) -> float:
+    """Find the next available fixed-wing slot (Phase 10).
+
+    Slots are configured per 12-hour segment. Pattern repeats after
+    configured segments.
+
+    Args:
+        current_time: Current simulation time in minutes.
+        config: FixedWingConfig with slots_per_segment and departure times.
+
+    Returns:
+        Time (in simulation minutes) of next available slot.
+    """
+    segment_duration_mins = 12 * 60  # 720 mins per segment
+    current_segment = int(current_time // segment_duration_mins)
+    pattern_length = len(config.slots_per_segment)
+
+    # Search for next slot (up to 2 pattern cycles ahead)
+    for offset in range(pattern_length * 2):
+        segment = current_segment + offset
+        pattern_index = segment % pattern_length
+
+        slots_in_segment = config.slots_per_segment[pattern_index]
+
+        if slots_in_segment > 0:
+            # Calculate departure time for this segment
+            segment_start = segment * segment_duration_mins
+            departure_time = segment_start + (config.departure_hour_in_segment * 60)
+
+            # Check if slot is in the future
+            if departure_time > current_time:
+                return departure_time
+
+    # Fallback: return next day's first slot
+    next_day_segment = ((current_segment // 2) + 1) * 2
+    segment_start = next_day_segment * segment_duration_mins
+    return segment_start + (config.departure_hour_in_segment * 60)
+
+
+def fixedwing_evacuation_process(
+    env: simpy.Environment,
+    patient: Patient,
+    resources: 'AEResources',
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+) -> Generator[simpy.Event, None, None]:
+    """Fixed-wing evacuation process with scheduled slots (Phase 10).
+
+    Fixed-wing has rigid departure times based on 12-hour segments.
+    Patient must be ready by cutoff time to make their slot.
+
+    Timeline:
+    1. Clinical stabilisation (2-4 hours)
+    2. Find next slot and wait (may miss slot if not ready in time)
+    3. Transport to airfield (30-90 mins)
+    4. Flight (1-3 hours)
+    5. Ward bed released on departure
+
+    Args:
+        env: SimPy environment.
+        patient: The patient being evacuated.
+        resources: Container of simulation resources.
+        scenario: Scenario configuration.
+        results: Results collector for metrics.
+
+    Yields:
+        SimPy events for the evacuation process.
+    """
+    config = scenario.aeromed_config.fixedwing
+    missed_config = scenario.aeromed_config.missed_slot
+
+    # Stabilisation
+    stabilisation_start = env.now
+    stab_mins = scenario.rng_aeromed.uniform(*config.stabilisation_mins)
+    yield env.timeout(stab_mins)
+    stabilisation_end = env.now
+
+    slot_missed = False
+    total_slot_wait = 0.0
+
+    # Find next available slot
+    while True:
+        next_slot = find_next_fixedwing_slot(env.now, config)
+        cutoff_time = next_slot - (config.cutoff_hours_before * 60)
+
+        if env.now <= cutoff_time:
+            # Can make this slot - wait until departure
+            wait_mins = next_slot - env.now
+            total_slot_wait += wait_mins
+            yield env.timeout(wait_mins)
+            break
+        else:
+            # Missed this slot
+            slot_missed = True
+            results.record_missed_aeromed_slot(patient, env.now)
+
+            # Optional re-stabilisation
+            if missed_config.requires_restabilisation:
+                restab_mins = stab_mins * missed_config.restabilisation_factor
+                yield env.timeout(restab_mins)
+
+            # Continue loop to find next slot
+
+    # Transport to airfield
+    transport_mins = scenario.rng_aeromed.uniform(*config.transport_to_airfield_mins)
+    yield env.timeout(transport_mins)
+
+    # Flight
+    flight_mins = scenario.rng_aeromed.uniform(*config.flight_duration_mins)
+    yield env.timeout(flight_mins)
+
+    departure_time = env.now
+
+    # Record evacuation
+    patient.record_aeromed_evacuation(
+        aeromed_type="FIXED_WING",
+        stabilisation_start=stabilisation_start,
+        stabilisation_end=stabilisation_end,
+        wait_for_slot=total_slot_wait,
+        departure=departure_time,
+        slot_missed=slot_missed,
+    )
+
+    results.record_aeromed_evacuation(patient, "FIXED_WING", total_slot_wait, slot_missed)
 
 
 def determine_required_diagnostics(
@@ -1121,6 +1913,12 @@ def patient_journey(
 
         patient.record_treatment(treatment_start, env.now)
 
+        # Phase 9: Initialize request variables for downstream resources
+        # Must be outside if/else blocks to be accessible after the with block
+        theatre_req = None
+        itu_req = None
+        ward_req = None
+
         # Phase 7: Check if patient requires inter-facility transfer
         if determine_transfer_required(patient, scenario):
             # Transfer process - patient keeps bay until vehicle arrives
@@ -1136,24 +1934,88 @@ def patient_journey(
                 disposition = Disposition.DISCHARGE
             elif next_node == NodeType.ITU:
                 disposition = Disposition.ADMIT_ICU
+            elif next_node == NodeType.SURGERY:
+                disposition = Disposition.ADMIT_WARD  # Surgery leads to ward eventually
             else:
                 disposition = Disposition.ADMIT_WARD
 
-            # Boarding for admitted patients (Phase 5e: bed is BLOCKED during boarding)
-            if disposition in (Disposition.ADMIT_WARD, Disposition.ADMIT_ICU):
+            # Phase 9: Downstream processing (if enabled)
+            if scenario.downstream_enabled and disposition != Disposition.DISCHARGE:
                 results.record_bed_state_change(NodeType.ED_BAYS, bed_id, BedState.BLOCKED, env.now)
-                yield from boarding_process(env, patient, scenario)
 
-        # Phase 5e: Bed goes to CLEANING state
+                # Check if patient can release ED bay early (P3/P4 to Ward only)
+                can_release_early = (
+                    scenario.release_stable_to_wait and
+                    can_release_ed_bay_early(patient, next_node)
+                )
+
+                # Handle downstream routing WITH blocking cascade
+                # Patient holds ED bay until downstream resource acquired
+                if next_node == NodeType.SURGERY and resources.theatre_tables is not None:
+                    # Request theatre - blocks until available
+                    theatre_req = resources.theatre_tables.request(priority=patient.priority.value)
+                    yield theatre_req
+                    results.record_resource_state("surgery", env.now, resources.theatre_tables.count)
+                    # Now have theatre - release ED bay
+                    # (context manager will release ED bay when we exit)
+
+                elif next_node == NodeType.ITU and resources.itu_beds is not None:
+                    # Request ITU - blocks until available
+                    itu_req = resources.itu_beds.request()
+                    yield itu_req
+                    results.record_resource_state("itu", env.now, resources.itu_beds.count)
+                    # Now have ITU - ED bay released when context exits
+
+                elif next_node == NodeType.WARD and resources.ward_beds is not None:
+                    if can_release_early:
+                        # P3/P4 patients can release ED bay and wait elsewhere
+                        patient.record_ed_bay_release(env.now, early=True)
+                        results.record_ed_bay_early_release()
+                        # ED bay released when context exits, patient will wait for ward
+                    else:
+                        # Request ward - blocks until available
+                        ward_req = resources.ward_beds.request()
+                        yield ward_req
+                        results.record_resource_state("ward", env.now, resources.ward_beds.count)
+                        # Now have ward - ED bay released when context exits
+            else:
+                # Legacy behaviour: boarding for admitted patients
+                if disposition in (Disposition.ADMIT_WARD, Disposition.ADMIT_ICU):
+                    results.record_bed_state_change(NodeType.ED_BAYS, bed_id, BedState.BLOCKED, env.now)
+                    yield from boarding_process(env, patient, scenario)
+
+        # Phase 5e: Bed goes to CLEANING state (for all paths)
         results.record_bed_state_change(NodeType.ED_BAYS, bed_id, BedState.CLEANING, env.now)
-
-        # Bed turnaround/cleaning time (patient departs but bed still cleaning)
         yield env.timeout(scenario.bed_turnaround_mins)
-
-        # Bed now EMPTY (ready for next patient)
         results.record_bed_state_change(NodeType.ED_BAYS, bed_id, BedState.EMPTY, env.now)
 
     results.record_resource_state(resource_name, env.now, resource.count)
+
+    # Phase 9: Continue downstream processing AFTER ED bay released
+    # The patient now holds their downstream resource (if acquired above)
+    if (scenario.downstream_enabled and
+        disposition != Disposition.DISCHARGE and
+        not determine_transfer_required(patient, scenario)):
+
+        next_node = scenario.get_next_node(NodeType.ED_BAYS, patient.priority)
+
+        if next_node == NodeType.SURGERY and resources.theatre_tables is not None:
+            # Patient already has theatre_req from above
+            # Continue with surgery and downstream routing
+            yield from _complete_theatre_stay(env, patient, resources, scenario, results, theatre_req)
+
+        elif next_node == NodeType.ITU and resources.itu_beds is not None:
+            # Patient already has itu_req from above
+            yield from _complete_itu_stay(env, patient, resources, scenario, results, itu_req)
+
+        elif next_node == NodeType.WARD and resources.ward_beds is not None:
+            # For early release patients, need to acquire ward now
+            if scenario.release_stable_to_wait and can_release_ed_bay_early(patient, next_node):
+                # Patient released ED bay early, now wait for ward
+                yield from ward_process(env, patient, resources, scenario, results, upstream_req=None)
+            else:
+                # Patient already has ward_req from above
+                yield from _complete_ward_stay(env, patient, resources, scenario, results, ward_req)
 
     # Departure
     patient.record_departure(env.now, disposition)
@@ -1314,6 +2176,28 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
             env, capacity=scenario.transfer_config.n_transfer_helicopters
         )
 
+    # Phase 9: Downstream resources (Theatre, ITU, Ward)
+    theatre_tables = None
+    itu_beds = None
+    ward_beds = None
+    if scenario.downstream_enabled:
+        if scenario.theatre_config and scenario.theatre_config.enabled:
+            theatre_tables = simpy.PriorityResource(
+                env, capacity=scenario.theatre_config.n_tables
+            )
+        if scenario.itu_config and scenario.itu_config.enabled:
+            itu_beds = simpy.Resource(env, capacity=scenario.itu_config.capacity)
+        if scenario.ward_config and scenario.ward_config.enabled:
+            ward_beds = simpy.Resource(env, capacity=scenario.ward_config.capacity)
+
+    # Phase 10: Aeromedical resources
+    hems_slots = None
+    if scenario.aeromed_config and scenario.aeromed_config.enabled:
+        if scenario.aeromed_config.hems.enabled:
+            hems_slots = simpy.Resource(
+                env, capacity=scenario.aeromed_config.hems.slots_per_day
+            )
+
     resources = AEResources(
         triage=simpy.PriorityResource(env, capacity=scenario.n_triage),
         ed_bays=simpy.PriorityResource(env, capacity=scenario.n_ed_bays),
@@ -1323,6 +2207,10 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
         diagnostics=diagnostic_resources,
         transfer_ambulances=transfer_ambulances,
         transfer_helicopters=transfer_helicopters,
+        theatre_tables=theatre_tables,
+        itu_beds=itu_beds,
+        ward_beds=ward_beds,
+        hems_slots=hems_slots,
     )
 
     # Initialize results collector

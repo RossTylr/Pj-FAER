@@ -8,14 +8,14 @@ import plotly.graph_objects as go
 
 from faer.experiment.analysis import compute_ci
 
-st.set_page_config(page_title="Results - FAER", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Results - FAER", page_icon="", layout="wide")
 
-st.title("📈 Results")
+st.title("Results")
 
 # Check for results
 if not st.session_state.get("run_complete"):
-    st.warning("⚠️ Please run a simulation first.")
-    st.page_link("pages/4_Run.py", label="Go to Run Simulation", icon="▶️")
+    st.warning("Please run a simulation first.")
+    st.page_link("pages/5_Run.py", label="Go to Run Simulation")
     st.stop()
 
 # Support both old key (results) and new key (run_results)
@@ -24,9 +24,9 @@ scenario = st.session_state.get('run_scenario') or st.session_state.get('scenari
 
 # Check for stale results (from before Phase 5 update)
 if "util_ed_bays" not in results:
-    st.warning("⚠️ Results are from an older version. Please re-run the simulation to see updated metrics.")
+    st.warning("Results are from an older version. Please re-run the simulation to see updated metrics.")
     st.session_state.run_complete = False
-    st.page_link("pages/4_Run.py", label="Go to Run Simulation", icon="▶️")
+    st.page_link("pages/5_Run.py", label="Go to Run Simulation")
     st.stop()
 
 n_reps = len(results["arrivals"])
@@ -159,6 +159,80 @@ with ds_cols[2]:
     ci = compute_ci(get_util("util_ward"))
     st.metric("Ward", f"{ci['mean']:.1%}")
     st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+# --- Aeromed (if enabled and toggle is checked) ---
+aeromed_total = results.get("aeromed_total", [0] * n_reps)
+has_aeromed_data = sum(aeromed_total) > 0
+
+# Check if aeromed was enabled in scenario
+aeromed_was_enabled = (
+    hasattr(scenario, 'aeromed_config')
+    and scenario.aeromed_config
+    and scenario.aeromed_config.enabled
+)
+
+# Show toggle if aeromed was enabled (even if no evacuations occurred)
+if aeromed_was_enabled or has_aeromed_data:
+    show_aeromed = st.checkbox(
+        "Show Aeromed Evacuation Metrics",
+        value=has_aeromed_data,  # Default to checked if there's data
+        help="Toggle to show/hide aeromed evacuation statistics"
+    )
+else:
+    show_aeromed = False
+
+if show_aeromed:
+    st.subheader("Aeromed Evacuation")
+    if not has_aeromed_data:
+        st.info("Aeromed was enabled but no evacuations occurred during this simulation run.")
+    else:
+        aeromed_cols = st.columns(4)
+
+        with aeromed_cols[0]:
+            ci = compute_ci(aeromed_total)
+            st.metric("Total Aeromed", f"{ci['mean']:.1f}")
+            st.caption(f"CI: [{ci['ci_lower']:.1f}, {ci['ci_upper']:.1f}]")
+
+        with aeromed_cols[1]:
+            hems_count = results.get("aeromed_hems_count", [0] * n_reps)
+            ci = compute_ci(hems_count)
+            st.metric("HEMS Evacuations", f"{ci['mean']:.1f}")
+            st.caption(f"CI: [{ci['ci_lower']:.1f}, {ci['ci_upper']:.1f}]")
+
+        with aeromed_cols[2]:
+            fw_count = results.get("aeromed_fixedwing_count", [0] * n_reps)
+            ci = compute_ci(fw_count)
+            st.metric("Fixed-Wing Evacuations", f"{ci['mean']:.1f}")
+            st.caption(f"CI: [{ci['ci_lower']:.1f}, {ci['ci_upper']:.1f}]")
+
+        with aeromed_cols[3]:
+            slots_missed = results.get("aeromed_slots_missed", [0] * n_reps)
+            ci = compute_ci(slots_missed)
+            st.metric("Slots Missed", f"{ci['mean']:.1f}")
+            st.caption(f"CI: [{ci['ci_lower']:.1f}, {ci['ci_upper']:.1f}]")
+
+        # Additional aeromed metrics row
+        aeromed_cols2 = st.columns(3)
+
+        with aeromed_cols2[0]:
+            slot_wait = results.get("mean_aeromed_slot_wait", [0] * n_reps)
+            ci = compute_ci(slot_wait)
+            st.metric("Mean Slot Wait", f"{ci['mean']:.1f} min")
+            st.caption(f"CI: [{ci['ci_lower']:.1f}, {ci['ci_upper']:.1f}]")
+
+        with aeromed_cols2[1]:
+            blocked_days = results.get("ward_bed_days_blocked_aeromed", [0] * n_reps)
+            ci = compute_ci(blocked_days)
+            st.metric("Ward Bed-Days Blocked", f"{ci['mean']:.2f}")
+            st.caption(f"By aeromed patients waiting for slots")
+
+        with aeromed_cols2[2]:
+            # Show aeromed as % of total departures
+            departures = results.get("departures", [1] * n_reps)
+            aeromed_pct = [a / d * 100 if d > 0 else 0 for a, d in zip(aeromed_total, departures)]
+            ci = compute_ci(aeromed_pct)
+            st.metric("Aeromed % of Departures", f"{ci['mean']:.1f}%")
+            st.caption(f"CI: [{ci['ci_lower']:.1f}%, {ci['ci_upper']:.1f}%]")
 
 # Utilisation bar chart - all resources
 st.markdown("---")
@@ -370,6 +444,7 @@ with config_cols[1]:
     st.write(f"ED Bays: {scenario.n_ed_bays}")
     st.write(f"Handover: {scenario.n_handover_bays}")
     st.write(f"Ambulances: {scenario.n_ambulances}")
+    st.write(f"Helicopters: {scenario.n_helicopters}")
 
 with config_cols[2]:
     st.write("**Acuity Mix**")
@@ -381,6 +456,48 @@ with config_cols[3]:
     st.write("**Experiment**")
     st.write(f"Replications: {n_reps}")
     st.write(f"Seed: {scenario.random_seed}")
+
+# Second row: Diagnostics and Downstream
+config_cols2 = st.columns(3)
+
+with config_cols2[0]:
+    st.write("**Diagnostics**")
+    if hasattr(scenario, 'diagnostic_configs') and scenario.diagnostic_configs:
+        from faer.core.entities import DiagnosticType
+        ct_config = scenario.diagnostic_configs.get(DiagnosticType.CT_SCAN)
+        xray_config = scenario.diagnostic_configs.get(DiagnosticType.XRAY)
+        bloods_config = scenario.diagnostic_configs.get(DiagnosticType.BLOODS)
+        st.write(f"CT Scanners: {ct_config.capacity if ct_config else 'N/A'}")
+        st.write(f"X-ray Rooms: {xray_config.capacity if xray_config else 'N/A'}")
+        st.write(f"Phlebotomy: {bloods_config.capacity if bloods_config else 'N/A'}")
+    else:
+        st.write("Not configured")
+
+with config_cols2[1]:
+    st.write("**Downstream**")
+    if hasattr(scenario, 'theatre_config') and scenario.theatre_config:
+        st.write(f"Theatre Tables: {scenario.theatre_config.n_tables}")
+    else:
+        st.write("Theatre: N/A")
+    if hasattr(scenario, 'itu_config') and scenario.itu_config:
+        st.write(f"ITU Beds: {scenario.itu_config.capacity}")
+    else:
+        st.write("ITU: N/A")
+    if hasattr(scenario, 'ward_config') and scenario.ward_config:
+        st.write(f"Ward Beds: {scenario.ward_config.capacity}")
+    else:
+        st.write("Ward: N/A")
+
+with config_cols2[2]:
+    st.write("**Downstream Status**")
+    if hasattr(scenario, 'downstream_enabled'):
+        st.write(f"Enabled: {'Yes' if scenario.downstream_enabled else 'No'}")
+    else:
+        st.write("Enabled: No")
+    if hasattr(scenario, 'aeromed_config') and scenario.aeromed_config:
+        st.write(f"Aeromed: {'Yes' if scenario.aeromed_config.enabled else 'No'}")
+    else:
+        st.write("Aeromed: No")
 
 st.divider()
 
@@ -418,6 +535,13 @@ export_df = pd.DataFrame({
     "util_theatre": get_util("util_theatre"),
     "util_itu": get_util("util_itu"),
     "util_ward": get_util("util_ward"),
+    # Aeromed
+    "aeromed_total": results.get("aeromed_total", [0] * n_reps),
+    "aeromed_hems_count": results.get("aeromed_hems_count", [0] * n_reps),
+    "aeromed_fixedwing_count": results.get("aeromed_fixedwing_count", [0] * n_reps),
+    "aeromed_slots_missed": results.get("aeromed_slots_missed", [0] * n_reps),
+    "mean_aeromed_slot_wait": results.get("mean_aeromed_slot_wait", [0] * n_reps),
+    "ward_bed_days_blocked_aeromed": results.get("ward_bed_days_blocked_aeromed", [0] * n_reps),
 })
 
 # Show preview
@@ -435,7 +559,7 @@ col1, col2 = st.columns(2)
 with col1:
     csv = export_df.to_csv(index=False)
     st.download_button(
-        label="📥 Download Raw Results (CSV)",
+        label="Download Raw Results (CSV)",
         data=csv,
         file_name="faer_results.csv",
         mime="text/csv",
@@ -460,7 +584,7 @@ with col2:
     summary_csv = summary_df.to_csv(index=False)
 
     st.download_button(
-        label="📥 Download Summary with CIs (CSV)",
+        label="Download Summary with CIs (CSV)",
         data=summary_csv,
         file_name="faer_summary.csv",
         mime="text/csv",

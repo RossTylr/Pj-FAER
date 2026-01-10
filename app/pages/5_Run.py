@@ -27,6 +27,10 @@ from faer.core.scenario import (
     ITUConfig,
     WardConfig,
     TheatreConfig,
+    AeromedConfig,
+    HEMSConfig,
+    FixedWingConfig,
+    MissedSlotConfig,
 )
 from faer.core.entities import DiagnosticType, Priority, ArrivalMode
 from faer.experiment.runner import multiple_replications
@@ -35,8 +39,8 @@ from app.components.schematic import (
     build_results_schematic
 )
 
-st.set_page_config(page_title="Run Simulation", page_icon="▶️", layout="wide")
-st.title("▶️ Run Simulation")
+st.set_page_config(page_title="Run Simulation", page_icon="", layout="wide")
+st.title("Run Simulation")
 
 # ============================================================
 # HELPER: Initialize defaults if not set
@@ -105,6 +109,35 @@ def init_defaults():
         'ward_los_hours_mean': 72.0,
         'ward_los_cv': 1.0,
         'ward_turnaround_mins': 30.0,
+
+        # Aeromed
+        'aeromed_enabled': False,
+        'p1_aeromed_probability': 0.05,
+        'fixedwing_proportion': 0.30,
+        'hems_enabled': True,
+        'hems_slots_per_day': 6,
+        'hems_operating_start_hour': 7,
+        'hems_operating_end_hour': 21,
+        'hems_stabilisation_min': 30.0,
+        'hems_stabilisation_max': 120.0,
+        'hems_transfer_to_helipad_min': 15.0,
+        'hems_transfer_to_helipad_max': 45.0,
+        'hems_flight_duration_min': 15.0,
+        'hems_flight_duration_max': 60.0,
+        'fixedwing_enabled': False,
+        'fixedwing_slots_am': 1,
+        'fixedwing_slots_pm': 0,
+        'fixedwing_departure_hour_in_segment': 2,
+        'fixedwing_cutoff_hours_before': 4,
+        'fixedwing_stabilisation_min': 120.0,
+        'fixedwing_stabilisation_max': 240.0,
+        'fixedwing_transport_to_airfield_min': 30.0,
+        'fixedwing_transport_to_airfield_max': 90.0,
+        'fixedwing_flight_duration_min': 60.0,
+        'fixedwing_flight_duration_max': 180.0,
+        'missed_slot_requires_restab': False,
+        'missed_slot_restab_factor': 0.30,
+        'missed_slot_max_wait_hours': 24.0,
     }
 
     for key, value in defaults.items():
@@ -209,6 +242,63 @@ def build_scenario_from_session(run_length: float, warm_up: float, random_seed: 
         to_ward_prob=1.0 - st.session_state.get('postop_itu_probability', 0.25),
     )
 
+    # Build aeromed config
+    hems_config = HEMSConfig(
+        enabled=st.session_state.get('hems_enabled', True),
+        slots_per_day=st.session_state.get('hems_slots_per_day', 6),
+        operating_start_hour=st.session_state.get('hems_operating_start_hour', 7),
+        operating_end_hour=st.session_state.get('hems_operating_end_hour', 21),
+        stabilisation_mins=(
+            st.session_state.get('hems_stabilisation_min', 30.0),
+            st.session_state.get('hems_stabilisation_max', 120.0)
+        ),
+        transfer_to_helipad_mins=(
+            st.session_state.get('hems_transfer_to_helipad_min', 15.0),
+            st.session_state.get('hems_transfer_to_helipad_max', 45.0)
+        ),
+        flight_duration_mins=(
+            st.session_state.get('hems_flight_duration_min', 15.0),
+            st.session_state.get('hems_flight_duration_max', 60.0)
+        ),
+    )
+
+    fixedwing_config = FixedWingConfig(
+        enabled=st.session_state.get('fixedwing_enabled', False),
+        slots_per_segment=[
+            st.session_state.get('fixedwing_slots_am', 1),
+            st.session_state.get('fixedwing_slots_pm', 0)
+        ],
+        departure_hour_in_segment=st.session_state.get('fixedwing_departure_hour_in_segment', 2),
+        cutoff_hours_before=st.session_state.get('fixedwing_cutoff_hours_before', 4),
+        stabilisation_mins=(
+            st.session_state.get('fixedwing_stabilisation_min', 120.0),
+            st.session_state.get('fixedwing_stabilisation_max', 240.0)
+        ),
+        transport_to_airfield_mins=(
+            st.session_state.get('fixedwing_transport_to_airfield_min', 30.0),
+            st.session_state.get('fixedwing_transport_to_airfield_max', 90.0)
+        ),
+        flight_duration_mins=(
+            st.session_state.get('fixedwing_flight_duration_min', 60.0),
+            st.session_state.get('fixedwing_flight_duration_max', 180.0)
+        ),
+    )
+
+    missed_slot_config = MissedSlotConfig(
+        requires_restabilisation=st.session_state.get('missed_slot_requires_restab', False),
+        restabilisation_factor=st.session_state.get('missed_slot_restab_factor', 0.30),
+        max_wait_before_restab_hours=st.session_state.get('missed_slot_max_wait_hours', 24.0),
+    )
+
+    aeromed_config = AeromedConfig(
+        enabled=st.session_state.get('aeromed_enabled', False),
+        p1_aeromed_probability=st.session_state.get('p1_aeromed_probability', 0.05),
+        fixedwing_proportion=st.session_state.get('fixedwing_proportion', 0.30),
+        hems=hems_config,
+        fixedwing=fixedwing_config,
+        missed_slot=missed_slot_config,
+    )
+
     # Build FullScenario
     scenario = FullScenario(
         # Run config
@@ -251,10 +341,14 @@ def build_scenario_from_session(run_length: float, warm_up: float, random_seed: 
         # Diagnostics
         diagnostic_configs=diagnostic_configs,
 
-        # Downstream configs
+        # Downstream configs - enable downstream processing
+        downstream_enabled=True,
         itu_config=itu_config,
         ward_config=ward_config,
         theatre_config=theatre_config,
+
+        # Aeromed config
+        aeromed_config=aeromed_config,
     )
 
     return scenario
@@ -263,7 +357,7 @@ def build_scenario_from_session(run_length: float, warm_up: float, random_seed: 
 # ============================================================
 # SECTION 1: PRE-RUN CONFIGURATION SUMMARY
 # ============================================================
-st.header("📋 Configuration Summary")
+st.header("Configuration Summary")
 st.markdown("Review your configuration before running.")
 
 tab_arrivals, tab_resources, tab_schematic = st.tabs(["Arrivals", "Resources", "Schematic"])
@@ -336,6 +430,20 @@ with tab_resources:
         bloods_val = st.session_state.get('bloods_capacity', 5) if st.session_state.get('bloods_enabled', True) else '-'
         st.write(f"Bloods: {bloods_val}")
 
+    # Aeromed summary
+    if st.session_state.get('aeromed_enabled', False):
+        st.markdown("---")
+        st.markdown("**Aeromed Evacuation**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.write(f"P1 aeromed prob: {st.session_state.get('p1_aeromed_probability', 0.05)*100:.0f}%")
+        with col2:
+            hems_status = "Enabled" if st.session_state.get('hems_enabled', True) else "Disabled"
+            st.write(f"HEMS: {hems_status}")
+        with col3:
+            fw_status = "Enabled" if st.session_state.get('fixedwing_enabled', False) else "Disabled"
+            st.write(f"Fixed-Wing: {fw_status}")
+
 with tab_schematic:
     schematic = build_capacity_graph_from_params(
         n_ambulances=st.session_state.get('n_ambulances', 10),
@@ -359,7 +467,7 @@ with tab_schematic:
 # SECTION 2: RUN CONTROLS
 # ============================================================
 st.markdown("---")
-st.header("▶️ Run Controls")
+st.header("Run Controls")
 
 # Check arrival model settings from Arrivals page
 arrival_model = st.session_state.get('arrival_model', 'profile_24h')
@@ -425,7 +533,7 @@ elif arrival_model == 'simple':
     st.info(f"Using simple daily totals distributed across {run_length_hours:.0f}h")
 
 # Build scenario button
-if st.button("▶️ Run Simulation", type="primary", use_container_width=True):
+if st.button("Run Simulation", type="primary", use_container_width=True):
 
     # Build FullScenario from session state
     try:
@@ -476,7 +584,7 @@ if st.session_state.get('run_complete') and 'run_results' in st.session_state:
     results = st.session_state.run_results
 
     st.markdown("---")
-    st.header("📊 Results Summary")
+    st.header("Results Summary")
 
     # Headline KPIs only
     col1, col2, col3, col4 = st.columns(4)
@@ -503,7 +611,7 @@ if st.session_state.get('run_complete') and 'run_results' in st.session_state:
         st.success("Simulation complete. View detailed results below.")
 
     # Prominent link to Results page
-    st.page_link("pages/5_Results.py", label="View Full Results & Analysis", icon="📈", use_container_width=True)
+    st.page_link("pages/6_Results.py", label="View Full Results & Analysis", use_container_width=True)
 
 # No results yet
 else:

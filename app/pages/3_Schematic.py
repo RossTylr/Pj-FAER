@@ -18,8 +18,8 @@ from app.components.schematic import (
     build_feedback_diagram
 )
 
-st.set_page_config(page_title="Schematic", page_icon="🗺️", layout="wide")
-st.title("🗺️ System Schematic")
+st.set_page_config(page_title="Schematic", page_icon="", layout="wide")
+st.title("System Schematic")
 
 st.info("This diagram updates live as you change configuration on Arrivals and Resources pages.")
 
@@ -56,7 +56,7 @@ st.graphviz_chart(schematic, use_container_width=True)
 
 # ============ CURRENT CONFIG SUMMARY ============
 st.markdown("---")
-st.header("📋 Current Configuration")
+st.header("Current Configuration")
 
 col1, col2 = st.columns(2)
 

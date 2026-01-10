@@ -83,6 +83,32 @@ class Patient:
     transfer_vehicle_arrived_time: Optional[float] = None
     transfer_departed_time: Optional[float] = None
 
+    # Phase 9: Downstream timing
+    surgery_wait_start: Optional[float] = None
+    surgery_start: Optional[float] = None
+    surgery_end: Optional[float] = None
+
+    itu_wait_start: Optional[float] = None
+    itu_start: Optional[float] = None
+    itu_end: Optional[float] = None
+
+    ward_wait_start: Optional[float] = None
+    ward_start: Optional[float] = None
+    ward_end: Optional[float] = None
+
+    # ED bay release tracking
+    released_ed_bay_early: bool = False
+    ed_bay_release_time: Optional[float] = None
+
+    # Phase 10: Aeromedical evacuation
+    requires_aeromed: bool = False
+    aeromed_type: Optional[str] = None  # "HEMS" or "FIXED_WING"
+    aeromed_stabilisation_start: Optional[float] = None
+    aeromed_stabilisation_end: Optional[float] = None
+    aeromed_wait_for_slot: Optional[float] = None  # Time waiting for transport
+    aeromed_slot_missed: bool = False
+    aeromed_departure: Optional[float] = None
+
     @property
     def handover_delay(self) -> float:
         """Time waiting for handover bay (Phase 5b)."""
@@ -251,3 +277,117 @@ class Patient:
         self.transfer_requested_time = requested_time
         self.transfer_vehicle_arrived_time = vehicle_arrived_time
         self.transfer_departed_time = departed_time
+
+    # Phase 9: Downstream timing properties and methods
+
+    @property
+    def surgery_wait(self) -> float:
+        """Time waiting for theatre table (Phase 9)."""
+        if self.surgery_wait_start is not None and self.surgery_start is not None:
+            return self.surgery_start - self.surgery_wait_start
+        return 0.0
+
+    @property
+    def surgery_duration(self) -> float:
+        """Time in surgery (Phase 9)."""
+        if self.surgery_start is not None and self.surgery_end is not None:
+            return self.surgery_end - self.surgery_start
+        return 0.0
+
+    @property
+    def itu_wait(self) -> float:
+        """Time waiting for ITU bed (Phase 9)."""
+        if self.itu_wait_start is not None and self.itu_start is not None:
+            return self.itu_start - self.itu_wait_start
+        return 0.0
+
+    @property
+    def itu_duration(self) -> float:
+        """Time in ITU (Phase 9)."""
+        if self.itu_start is not None and self.itu_end is not None:
+            return self.itu_end - self.itu_start
+        return 0.0
+
+    @property
+    def ward_wait(self) -> float:
+        """Time waiting for ward bed (Phase 9)."""
+        if self.ward_wait_start is not None and self.ward_start is not None:
+            return self.ward_start - self.ward_wait_start
+        return 0.0
+
+    @property
+    def ward_duration(self) -> float:
+        """Time in ward (Phase 9)."""
+        if self.ward_start is not None and self.ward_end is not None:
+            return self.ward_end - self.ward_start
+        return 0.0
+
+    def record_surgery(self, wait_start: float, start: float, end: float) -> None:
+        """Record surgery timestamps (Phase 9)."""
+        self.surgery_wait_start = wait_start
+        self.surgery_start = start
+        self.surgery_end = end
+        self.resources_used.append("theatre")
+
+    def record_itu(self, wait_start: float, start: float, end: float) -> None:
+        """Record ITU timestamps (Phase 9)."""
+        self.itu_wait_start = wait_start
+        self.itu_start = start
+        self.itu_end = end
+        self.resources_used.append("itu")
+
+    def record_ward(self, wait_start: float, start: float, end: float) -> None:
+        """Record ward timestamps (Phase 9)."""
+        self.ward_wait_start = wait_start
+        self.ward_start = start
+        self.ward_end = end
+        self.resources_used.append("ward")
+
+    def record_ed_bay_release(self, time: float, early: bool = False) -> None:
+        """Record when ED bay was released (Phase 9)."""
+        self.ed_bay_release_time = time
+        self.released_ed_bay_early = early
+
+    # Phase 10: Aeromedical evacuation properties and methods
+
+    @property
+    def aeromed_stabilisation_duration(self) -> float:
+        """Time for aeromed clinical stabilisation (Phase 10)."""
+        if self.aeromed_stabilisation_start is not None and self.aeromed_stabilisation_end is not None:
+            return self.aeromed_stabilisation_end - self.aeromed_stabilisation_start
+        return 0.0
+
+    @property
+    def aeromed_total_time(self) -> float:
+        """Total aeromed process time from stabilisation start to departure (Phase 10)."""
+        if self.aeromed_stabilisation_start is not None and self.aeromed_departure is not None:
+            return self.aeromed_departure - self.aeromed_stabilisation_start
+        return 0.0
+
+    def record_aeromed_evacuation(
+        self,
+        aeromed_type: str,
+        stabilisation_start: float,
+        stabilisation_end: float,
+        wait_for_slot: float,
+        departure: float,
+        slot_missed: bool = False,
+    ) -> None:
+        """Record aeromedical evacuation timestamps (Phase 10).
+
+        Args:
+            aeromed_type: "HEMS" or "FIXED_WING".
+            stabilisation_start: Time when clinical stabilisation began.
+            stabilisation_end: Time when stabilisation completed.
+            wait_for_slot: Total time waiting for transport slot.
+            departure: Time when patient departed via aeromed.
+            slot_missed: Whether patient missed a scheduled slot.
+        """
+        self.requires_aeromed = True
+        self.aeromed_type = aeromed_type
+        self.aeromed_stabilisation_start = stabilisation_start
+        self.aeromed_stabilisation_end = stabilisation_end
+        self.aeromed_wait_for_slot = wait_for_slot
+        self.aeromed_departure = departure
+        self.aeromed_slot_missed = slot_missed
+        self.resources_used.append(f"aeromed_{aeromed_type.lower()}")

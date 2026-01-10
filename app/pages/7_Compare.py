@@ -20,12 +20,13 @@ if str(app_dir) not in sys.path:
 
 from faer.core.scenario import (
     FullScenario, RunLengthPreset, ITUConfig, WardConfig, TheatreConfig,
+    AeromedConfig, HEMSConfig, FixedWingConfig,
 )
 from faer.core.entities import NodeType, DiagnosticType
 from faer.experiment.comparison import compare_scenarios
 from components.scenario_summary import get_scenario_diff
 
-st.set_page_config(page_title="Compare - FAER", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Compare - FAER", page_icon="", layout="wide")
 
 st.title("Compare Scenarios")
 
@@ -69,13 +70,25 @@ with col_a:
         a_xray = st.number_input("X-ray Rooms", 1, 10, 3, key="a_xray")
         a_bloods = st.number_input("Phlebotomists", 1, 10, 5, key="a_bloods")
 
+    with st.expander("Acuity Mix"):
+        a_resus = st.slider("Resus %", 0, 20, 5, key="a_resus")
+        a_majors = st.slider("Majors %", 20, 80, 55, key="a_majors")
+        a_minors = 100 - a_resus - a_majors
+        st.write(f"Minors: {a_minors}%")
+
     with st.expander("Downstream"):
+        a_downstream_enabled = st.checkbox("Enable Downstream", value=False, key="a_downstream_enabled")
         a_theatre = st.number_input("Theatre Tables", 1, 10, 2, key="a_theatre")
         a_theatre_session = st.number_input("Session Time (min)", 60, 480, 240, key="a_theatre_session")
         a_itu = st.number_input("ITU Beds", 1, 20, 6, key="a_itu")
         a_itu_los = st.number_input("ITU LoS (hours)", 12, 168, 48, key="a_itu_los")
         a_ward = st.number_input("Ward Beds", 10, 100, 30, key="a_ward")
         a_ward_los = st.number_input("Ward LoS (hours)", 24, 336, 72, key="a_ward_los")
+
+    with st.expander("Aeromed"):
+        a_aeromed_enabled = st.checkbox("Enable Aeromed", value=False, key="a_aeromed_enabled")
+        a_hems_slots = st.number_input("HEMS Slots/Day", 0, 12, 6, key="a_hems_slots")
+        a_fixedwing_enabled = st.checkbox("Fixed-Wing Enabled", value=False, key="a_fixedwing_enabled")
 
 # ===== Divider =====
 with col_divider:
@@ -108,13 +121,25 @@ with col_b:
         b_xray = st.number_input("X-ray Rooms", 1, 10, 3, key="b_xray")
         b_bloods = st.number_input("Phlebotomists", 1, 10, 5, key="b_bloods")
 
+    with st.expander("Acuity Mix"):
+        b_resus = st.slider("Resus %", 0, 20, 5, key="b_resus")
+        b_majors = st.slider("Majors %", 20, 80, 55, key="b_majors")
+        b_minors = 100 - b_resus - b_majors
+        st.write(f"Minors: {b_minors}%")
+
     with st.expander("Downstream"):
+        b_downstream_enabled = st.checkbox("Enable Downstream", value=False, key="b_downstream_enabled")
         b_theatre = st.number_input("Theatre Tables", 1, 10, 2, key="b_theatre")
         b_theatre_session = st.number_input("Session Time (min)", 60, 480, 240, key="b_theatre_session")
         b_itu = st.number_input("ITU Beds", 1, 20, 6, key="b_itu")
         b_itu_los = st.number_input("ITU LoS (hours)", 12, 168, 48, key="b_itu_los")
         b_ward = st.number_input("Ward Beds", 10, 100, 30, key="b_ward")
         b_ward_los = st.number_input("Ward LoS (hours)", 24, 336, 72, key="b_ward_los")
+
+    with st.expander("Aeromed"):
+        b_aeromed_enabled = st.checkbox("Enable Aeromed", value=False, key="b_aeromed_enabled")
+        b_hems_slots = st.number_input("HEMS Slots/Day", 0, 12, 6, key="b_hems_slots")
+        b_fixedwing_enabled = st.checkbox("Fixed-Wing Enabled", value=False, key="b_fixedwing_enabled")
 
 # ============ DIFFERENCES SUMMARY ============
 st.markdown("---")
@@ -132,12 +157,19 @@ comparisons = [
     ("CT Scanners", a_ct, b_ct),
     ("X-ray Rooms", a_xray, b_xray),
     ("Phlebotomists", a_bloods, b_bloods),
+    ("Resus %", a_resus, b_resus),
+    ("Majors %", a_majors, b_majors),
+    ("Minors %", a_minors, b_minors),
+    ("Downstream Enabled", int(a_downstream_enabled), int(b_downstream_enabled)),
     ("Theatre Tables", a_theatre, b_theatre),
     ("Theatre Session (min)", a_theatre_session, b_theatre_session),
     ("ITU Beds", a_itu, b_itu),
     ("ITU LoS (h)", a_itu_los, b_itu_los),
     ("Ward Beds", a_ward, b_ward),
     ("Ward LoS (h)", a_ward_los, b_ward_los),
+    ("Aeromed Enabled", int(a_aeromed_enabled), int(b_aeromed_enabled)),
+    ("HEMS Slots/Day", a_hems_slots, b_hems_slots),
+    ("Fixed-Wing Enabled", int(a_fixedwing_enabled), int(b_fixedwing_enabled)),
 ]
 
 diff_data = []
@@ -190,19 +222,39 @@ with sim_col2:
 
 # Metrics to compare
 available_metrics = [
+    # Core flow metrics
     'arrivals',
+    'departures',
     'p_delay',
     'mean_triage_wait',
     'mean_treatment_wait',
     'mean_system_time',
     'p95_system_time',
-    'util_triage',
-    'util_ed_bays',
+    'admission_rate',
+    # Emergency services utilisation
+    'util_ambulance_fleet',
+    'util_helicopter_fleet',
     'util_handover',
     'mean_handover_delay',
+    # Triage & ED utilisation
+    'util_triage',
+    'util_ed_bays',
     'mean_boarding_time',
     'p_boarding',
-    'admission_rate',
+    # Diagnostics utilisation
+    'util_CT_SCAN',
+    'util_XRAY',
+    'util_BLOODS',
+    # Downstream utilisation
+    'util_theatre',
+    'util_itu',
+    'util_ward',
+    # Aeromed metrics
+    'aeromed_total',
+    'aeromed_hems_count',
+    'aeromed_fixedwing_count',
+    'aeromed_slots_missed',
+    'mean_aeromed_slot_wait',
 ]
 
 with sim_col3:
@@ -234,11 +286,20 @@ if run_comparison:
             n_handover_bays=a_handover,
             n_triage=a_triage,
             n_ed_bays=a_ed,
+            p_resus=a_resus / 100.0,
+            p_majors=a_majors / 100.0,
+            p_minors=a_minors / 100.0,
+            downstream_enabled=a_downstream_enabled,
             itu_config=ITUConfig(capacity=a_itu, los_mean_hours=float(a_itu_los)),
             ward_config=WardConfig(capacity=a_ward, los_mean_hours=float(a_ward_los)),
             theatre_config=TheatreConfig(
                 n_tables=a_theatre,
                 session_duration_mins=a_theatre_session,
+            ),
+            aeromed_config=AeromedConfig(
+                enabled=a_aeromed_enabled,
+                hems=HEMSConfig(slots_per_day=a_hems_slots),
+                fixedwing=FixedWingConfig(enabled=a_fixedwing_enabled),
             ),
         )
 
@@ -251,11 +312,20 @@ if run_comparison:
             n_handover_bays=b_handover,
             n_triage=b_triage,
             n_ed_bays=b_ed,
+            p_resus=b_resus / 100.0,
+            p_majors=b_majors / 100.0,
+            p_minors=b_minors / 100.0,
+            downstream_enabled=b_downstream_enabled,
             itu_config=ITUConfig(capacity=b_itu, los_mean_hours=float(b_itu_los)),
             ward_config=WardConfig(capacity=b_ward, los_mean_hours=float(b_ward_los)),
             theatre_config=TheatreConfig(
                 n_tables=b_theatre,
                 session_duration_mins=b_theatre_session,
+            ),
+            aeromed_config=AeromedConfig(
+                enabled=b_aeromed_enabled,
+                hems=HEMSConfig(slots_per_day=b_hems_slots),
+                fixedwing=FixedWingConfig(enabled=b_fixedwing_enabled),
             ),
         )
 

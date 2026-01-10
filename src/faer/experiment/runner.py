@@ -48,6 +48,11 @@ def multiple_replications(
                 "util_theatre", "util_itu", "util_ward",
                 # Diagnostic utilisation
                 "util_CT_SCAN", "util_XRAY", "util_BLOODS",
+                # Aeromed metrics
+                "aeromed_hems_count", "aeromed_fixedwing_count",
+                "aeromed_total", "aeromed_slots_missed",
+                "mean_aeromed_slot_wait", "max_aeromed_slot_wait",
+                "ward_bed_days_blocked_aeromed",
             ]
         else:
             metric_names = ["p_delay", "mean_queue_time", "utilisation"]
