@@ -501,6 +501,346 @@ with config_cols2[2]:
 
 st.divider()
 
+# ===== COST MODELLING SECTION =====
+st.header("Cost Modelling")
+
+with st.expander("Calculate Financial Costs", expanded=False):
+    st.markdown("""
+    Calculate financial costs from simulation results using configurable bed-day rates.
+    This is a **post-hoc analysis** that does not affect simulation behaviour.
+
+    **Note:** Cost calculation runs a single replication to access detailed patient data.
+    """)
+
+    # Import cost modelling module
+    from faer.results.costs import (
+        CostConfig, calculate_costs, calculate_costs_by_priority,
+        format_currency, CURRENCY_SYMBOLS
+    )
+    from faer.model.full_model import run_full_simulation, FullResultsCollector
+
+    # Cost configuration in columns
+    st.subheader("Configuration")
+
+    cost_col1, cost_col2 = st.columns(2)
+
+    with cost_col1:
+        currency = st.selectbox(
+            "Currency",
+            options=["GBP", "USD", "EUR"],
+            index=0,
+            help="Select currency for cost display"
+        )
+        currency_symbol = CURRENCY_SYMBOLS.get(currency, currency)
+
+    with cost_col2:
+        apply_priority_multipliers = st.checkbox(
+            "Apply priority multipliers",
+            value=True,
+            help="Higher acuity patients (P1/P2) cost more due to resource intensity"
+        )
+
+    # Bed-day rates
+    st.markdown("**Bed-Day Rates** (per 24 hours)")
+    rate_cols = st.columns(4)
+
+    with rate_cols[0]:
+        ed_bay_rate = st.number_input(
+            f"ED Bay ({currency_symbol}/day)",
+            min_value=0.0, max_value=10000.0, value=500.0, step=50.0
+        )
+    with rate_cols[1]:
+        itu_rate = st.number_input(
+            f"ITU ({currency_symbol}/day)",
+            min_value=0.0, max_value=20000.0, value=2000.0, step=100.0
+        )
+    with rate_cols[2]:
+        ward_rate = st.number_input(
+            f"Ward ({currency_symbol}/day)",
+            min_value=0.0, max_value=5000.0, value=400.0, step=50.0
+        )
+    with rate_cols[3]:
+        theatre_rate = st.number_input(
+            f"Theatre ({currency_symbol}/hr)",
+            min_value=0.0, max_value=10000.0, value=2000.0, step=100.0
+        )
+
+    # Per-episode and transport costs
+    st.markdown("**Per-Episode & Transport Costs**")
+    episode_cols = st.columns(4)
+
+    with episode_cols[0]:
+        triage_cost = st.number_input(
+            f"Triage ({currency_symbol})",
+            min_value=0.0, max_value=500.0, value=20.0, step=5.0
+        )
+    with episode_cols[1]:
+        diagnostics_cost = st.number_input(
+            f"Diagnostics avg ({currency_symbol})",
+            min_value=0.0, max_value=1000.0, value=75.0, step=10.0
+        )
+    with episode_cols[2]:
+        ambulance_cost = st.number_input(
+            f"Ambulance ({currency_symbol})",
+            min_value=0.0, max_value=2000.0, value=275.0, step=25.0
+        )
+    with episode_cols[3]:
+        hems_cost = st.number_input(
+            f"HEMS flight ({currency_symbol})",
+            min_value=0.0, max_value=20000.0, value=3500.0, step=100.0
+        )
+
+    st.markdown("---")
+
+    # Run button
+    if st.button("Calculate Costs", type="primary", use_container_width=True):
+        with st.spinner("Running cost calculation (single replication)..."):
+            # Create cost config
+            config = CostConfig(
+                enabled=True,
+                currency=currency,
+                ed_bay_per_day=ed_bay_rate,
+                itu_bed_per_day=itu_rate,
+                ward_bed_per_day=ward_rate,
+                theatre_per_hour=theatre_rate,
+                triage_cost=triage_cost,
+                diagnostics_base_cost=diagnostics_cost,
+                ambulance_per_journey=ambulance_cost,
+                hems_per_flight=hems_cost,
+            )
+
+            if not apply_priority_multipliers:
+                config.apply_priority_to = []
+
+            # Run a single replication to get patient-level data
+            # Use the scenario from session state
+            try:
+                import simpy
+                from faer.core.entities import DiagnosticType
+
+                # Create fresh environment for cost calculation
+                env = simpy.Environment()
+
+                # Run simulation to get patient data
+                # We need to access the FullResultsCollector directly
+                from faer.model.full_model import (
+                    AEResources, FullResultsCollector,
+                    arrival_generator_multistream, arrival_generator_single,
+                    sample_lognormal
+                )
+                import itertools
+
+                cost_scenario = scenario.clone_with_seed(scenario.random_seed)
+
+                # Create resources
+                diagnostic_resources = {}
+                for diag_type, diag_config in cost_scenario.diagnostic_configs.items():
+                    if diag_config.enabled:
+                        diagnostic_resources[diag_type] = simpy.PriorityResource(
+                            env, capacity=diag_config.capacity
+                        )
+
+                transfer_ambulances = None
+                transfer_helicopters = None
+                if cost_scenario.transfer_config.enabled:
+                    transfer_ambulances = simpy.Resource(
+                        env, capacity=cost_scenario.transfer_config.n_transfer_ambulances
+                    )
+                    transfer_helicopters = simpy.Resource(
+                        env, capacity=cost_scenario.transfer_config.n_transfer_helicopters
+                    )
+
+                theatre_tables = None
+                itu_beds = None
+                ward_beds = None
+                if cost_scenario.downstream_enabled:
+                    if cost_scenario.theatre_config and cost_scenario.theatre_config.enabled:
+                        theatre_tables = simpy.PriorityResource(
+                            env, capacity=cost_scenario.theatre_config.n_tables
+                        )
+                    if cost_scenario.itu_config and cost_scenario.itu_config.enabled:
+                        itu_beds = simpy.Resource(env, capacity=cost_scenario.itu_config.capacity)
+                    if cost_scenario.ward_config and cost_scenario.ward_config.enabled:
+                        ward_beds = simpy.Resource(env, capacity=cost_scenario.ward_config.capacity)
+
+                hems_slots = None
+                if cost_scenario.aeromed_config and cost_scenario.aeromed_config.enabled:
+                    if cost_scenario.aeromed_config.hems.enabled:
+                        hems_slots = simpy.Resource(
+                            env, capacity=cost_scenario.aeromed_config.hems.slots_per_day
+                        )
+
+                resources = AEResources(
+                    triage=simpy.PriorityResource(env, capacity=cost_scenario.n_triage),
+                    ed_bays=simpy.PriorityResource(env, capacity=cost_scenario.n_ed_bays),
+                    handover_bays=simpy.Resource(env, capacity=cost_scenario.n_handover_bays),
+                    ambulance_fleet=simpy.Resource(env, capacity=cost_scenario.n_ambulances),
+                    helicopter_fleet=simpy.Resource(env, capacity=cost_scenario.n_helicopters),
+                    diagnostics=diagnostic_resources,
+                    transfer_ambulances=transfer_ambulances,
+                    transfer_helicopters=transfer_helicopters,
+                    theatre_tables=theatre_tables,
+                    itu_beds=itu_beds,
+                    ward_beds=ward_beds,
+                    hems_slots=hems_slots,
+                )
+
+                collector = FullResultsCollector()
+                patient_counter = itertools.count(1)
+
+                # Start arrival generators
+                if cost_scenario.arrival_configs:
+                    for arr_config in cost_scenario.arrival_configs:
+                        env.process(arrival_generator_multistream(
+                            env, resources, arr_config, cost_scenario, collector, patient_counter
+                        ))
+                else:
+                    env.process(arrival_generator_single(
+                        env, resources, cost_scenario, collector, patient_counter
+                    ))
+
+                # Run simulation
+                total_time = cost_scenario.warm_up + cost_scenario.run_length
+                env.run(until=total_time)
+
+                # Filter to post-warmup patients who have departed
+                valid_patients = [
+                    p for p in collector.patients
+                    if p.arrival_time >= cost_scenario.warm_up and p.departure_time is not None
+                ]
+
+                # Calculate costs
+                breakdown = calculate_costs(valid_patients, config)
+                by_priority = calculate_costs_by_priority(valid_patients, config)
+
+                # Store results in session state
+                st.session_state['cost_breakdown'] = breakdown
+                st.session_state['cost_by_priority'] = by_priority
+                st.session_state['cost_config'] = config
+                st.session_state['cost_patients_count'] = len(valid_patients)
+
+                st.success(f"Cost calculation complete for {len(valid_patients)} patients.")
+
+            except Exception as e:
+                st.error(f"Error calculating costs: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+
+    # Display results if available
+    if 'cost_breakdown' in st.session_state:
+        breakdown = st.session_state['cost_breakdown']
+        by_priority = st.session_state['cost_by_priority']
+        sym = breakdown.get_currency_symbol()
+
+        st.markdown("---")
+        st.subheader("Cost Summary")
+
+        # Key metrics
+        summary_cols = st.columns(3)
+        with summary_cols[0]:
+            st.metric(
+                "Grand Total",
+                format_currency(breakdown.grand_total, sym),
+                help="Total cost across all categories"
+            )
+        with summary_cols[1]:
+            st.metric(
+                "Cost per Patient",
+                format_currency(breakdown.cost_per_patient, sym),
+                help="Average cost per patient"
+            )
+        with summary_cols[2]:
+            st.metric(
+                "Patients",
+                f"{breakdown.total_patients:,}",
+                help="Number of patients included in calculation"
+            )
+
+        # Cost breakdown by category
+        st.subheader("Breakdown by Category")
+
+        cat_cols = st.columns(4)
+        with cat_cols[0]:
+            st.markdown("**Bed Costs**")
+            st.write(f"ED Bays: {format_currency(breakdown.ed_bay_costs, sym)}")
+            st.write(f"ITU: {format_currency(breakdown.itu_bed_costs, sym)}")
+            st.write(f"Ward: {format_currency(breakdown.ward_bed_costs, sym)}")
+            st.write(f"**Total: {format_currency(breakdown.total_bed_costs, sym)}**")
+
+        with cat_cols[1]:
+            st.markdown("**Theatre**")
+            st.write(f"Theatre: {format_currency(breakdown.theatre_costs, sym)}")
+
+        with cat_cols[2]:
+            st.markdown("**Per-Episode**")
+            st.write(f"Triage: {format_currency(breakdown.triage_costs, sym)}")
+            st.write(f"Diagnostics: {format_currency(breakdown.diagnostics_costs, sym)}")
+            st.write(f"Discharge: {format_currency(breakdown.discharge_costs, sym)}")
+            st.write(f"**Total: {format_currency(breakdown.total_episode_costs, sym)}**")
+
+        with cat_cols[3]:
+            st.markdown("**Transport**")
+            st.write(f"Ambulance: {format_currency(breakdown.ambulance_costs, sym)}")
+            st.write(f"HEMS: {format_currency(breakdown.hems_costs, sym)}")
+            st.write(f"Fixed-wing: {format_currency(breakdown.fixedwing_costs, sym)}")
+            st.write(f"**Total: {format_currency(breakdown.total_transport_costs, sym)}**")
+
+        # Cost by priority
+        st.subheader("Breakdown by Priority")
+
+        priority_data = pd.DataFrame({
+            "Priority": ["P1 (Immediate)", "P2 (Very Urgent)", "P3 (Urgent)", "P4 (Standard)"],
+            "Patients": [by_priority.p1_count, by_priority.p2_count,
+                        by_priority.p3_count, by_priority.p4_count],
+            "Total Cost": [
+                format_currency(by_priority.p1_total, sym),
+                format_currency(by_priority.p2_total, sym),
+                format_currency(by_priority.p3_total, sym),
+                format_currency(by_priority.p4_total, sym),
+            ],
+            "Per Patient": [
+                format_currency(by_priority.p1_per_patient, sym),
+                format_currency(by_priority.p2_per_patient, sym),
+                format_currency(by_priority.p3_per_patient, sym),
+                format_currency(by_priority.p4_per_patient, sym),
+            ],
+        })
+        st.dataframe(priority_data, use_container_width=True, hide_index=True)
+
+        # Cost distribution chart
+        cost_data = pd.DataFrame({
+            "Category": ["ED Bays", "Theatre", "ITU", "Ward", "Transport", "Per-Episode"],
+            "Cost": [
+                breakdown.ed_bay_costs,
+                breakdown.theatre_costs,
+                breakdown.itu_bed_costs,
+                breakdown.ward_bed_costs,
+                breakdown.total_transport_costs,
+                breakdown.total_episode_costs,
+            ]
+        })
+
+        fig = px.pie(
+            cost_data,
+            values="Cost",
+            names="Category",
+            title="Cost Distribution by Category",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Export cost data
+        st.markdown("---")
+        cost_export = pd.DataFrame([breakdown.to_dict()])
+        csv_costs = cost_export.to_csv(index=False)
+        st.download_button(
+            label="Download Cost Breakdown (CSV)",
+            data=csv_costs,
+            file_name="faer_costs.csv",
+            mime="text/csv",
+        )
+
+st.divider()
+
 # ===== EXPORT SECTION =====
 st.header("Export Results")
 
