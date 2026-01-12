@@ -348,6 +348,74 @@ class FullResultsCollector:
             "minors_mean_wait": float(np.mean([p.treatment_wait for p in minors_patients])) if minors_patients else 0.0,
         }
 
+        # P1-P4 Extended Statistics (NHS breach targets)
+        # Targets: P1=0min, P2=10min, P3=60min, P4=120min
+        priority_targets = {
+            "P1": (p1_patients, 0),
+            "P2": (p2_patients, 10),
+            "P3": (p3_patients, 60),
+            "P4": (p4_patients, 120),
+        }
+
+        for priority_name, (patients, target_mins) in priority_targets.items():
+            waits = [p.treatment_wait for p in patients]
+            if waits:
+                metrics[f"{priority_name}_p95_wait"] = float(np.percentile(waits, 95))
+                metrics[f"{priority_name}_max_wait"] = float(np.max(waits))
+                metrics[f"{priority_name}_breach_rate"] = float(np.mean([w > target_mins for w in waits]))
+                sys_times = [p.system_time for p in patients if p.departure_time]
+                metrics[f"{priority_name}_mean_system_time"] = float(np.mean(sys_times)) if sys_times else 0.0
+            else:
+                metrics[f"{priority_name}_p95_wait"] = 0.0
+                metrics[f"{priority_name}_max_wait"] = 0.0
+                metrics[f"{priority_name}_breach_rate"] = 0.0
+                metrics[f"{priority_name}_mean_system_time"] = 0.0
+
+            # Departure counts by priority
+            metrics[f"departures_{priority_name}"] = len([p for p in patients if p.departure_time])
+
+        # Acuity Extended Statistics
+        # Acuity maps to typical priorities: Resus→P1, Majors→P2/P3, Minors→P3/P4
+        acuity_data = {
+            "resus": resus_patients,
+            "majors": majors_patients,
+            "minors": minors_patients,
+        }
+
+        for acuity_name, patients in acuity_data.items():
+            waits = [p.treatment_wait for p in patients]
+            if waits:
+                metrics[f"{acuity_name}_p95_wait"] = float(np.percentile(waits, 95))
+                metrics[f"{acuity_name}_max_wait"] = float(np.max(waits))
+                sys_times = [p.system_time for p in patients if p.departure_time]
+                metrics[f"{acuity_name}_mean_system_time"] = float(np.mean(sys_times)) if sys_times else 0.0
+            else:
+                metrics[f"{acuity_name}_p95_wait"] = 0.0
+                metrics[f"{acuity_name}_max_wait"] = 0.0
+                metrics[f"{acuity_name}_mean_system_time"] = 0.0
+
+            # Departure counts by acuity
+            metrics[f"departures_{acuity_name}"] = len([p for p in patients if p.departure_time])
+
+        # Detailed disposition breakdown
+        discharged_patients = [p for p in valid_patients if p.disposition == Disposition.DISCHARGE]
+        ward_patients = [p for p in valid_patients if p.disposition == Disposition.ADMIT_WARD]
+        icu_patients = [p for p in valid_patients if p.disposition == Disposition.ADMIT_ICU]
+        transfer_patients = [p for p in valid_patients if p.disposition == Disposition.TRANSFER]
+        left_patients = [p for p in valid_patients if p.disposition == Disposition.LEFT]
+
+        metrics["discharged_count"] = len(discharged_patients)
+        metrics["admitted_ward_count"] = len(ward_patients)
+        metrics["admitted_icu_count"] = len(icu_patients)
+        metrics["transfer_count"] = len(transfer_patients)
+        metrics["left_count"] = len(left_patients)
+
+        # Mean LoS by disposition type
+        metrics["mean_los_discharged"] = float(np.mean([p.system_time for p in discharged_patients])) if discharged_patients else 0.0
+        metrics["mean_los_ward"] = float(np.mean([p.system_time for p in ward_patients])) if ward_patients else 0.0
+        metrics["mean_los_icu"] = float(np.mean([p.system_time for p in icu_patients])) if icu_patients else 0.0
+        metrics["mean_los_transfer"] = float(np.mean([p.system_time for p in transfer_patients])) if transfer_patients else 0.0
+
         # Boarding metrics
         if self.boarding_events:
             boarding_times = [e[2] for e in self.boarding_events]
@@ -667,6 +735,21 @@ class FullResultsCollector:
             "util_ambulance_fleet": 0.0, "util_helicopter_fleet": 0.0,
             "P1_mean_wait": 0.0, "P2_mean_wait": 0.0, "P3_mean_wait": 0.0, "P4_mean_wait": 0.0,
             "resus_mean_wait": 0.0, "majors_mean_wait": 0.0, "minors_mean_wait": 0.0,
+            # P1-P4 extended statistics
+            "P1_p95_wait": 0.0, "P2_p95_wait": 0.0, "P3_p95_wait": 0.0, "P4_p95_wait": 0.0,
+            "P1_max_wait": 0.0, "P2_max_wait": 0.0, "P3_max_wait": 0.0, "P4_max_wait": 0.0,
+            "P1_breach_rate": 0.0, "P2_breach_rate": 0.0, "P3_breach_rate": 0.0, "P4_breach_rate": 0.0,
+            "P1_mean_system_time": 0.0, "P2_mean_system_time": 0.0, "P3_mean_system_time": 0.0, "P4_mean_system_time": 0.0,
+            "departures_P1": 0, "departures_P2": 0, "departures_P3": 0, "departures_P4": 0,
+            # Acuity extended statistics
+            "resus_p95_wait": 0.0, "majors_p95_wait": 0.0, "minors_p95_wait": 0.0,
+            "resus_max_wait": 0.0, "majors_max_wait": 0.0, "minors_max_wait": 0.0,
+            "resus_mean_system_time": 0.0, "majors_mean_system_time": 0.0, "minors_mean_system_time": 0.0,
+            "departures_resus": 0, "departures_majors": 0, "departures_minors": 0,
+            # Detailed disposition breakdown
+            "discharged_count": 0, "admitted_ward_count": 0, "admitted_icu_count": 0,
+            "transfer_count": 0, "left_count": 0,
+            "mean_los_discharged": 0.0, "mean_los_ward": 0.0, "mean_los_icu": 0.0, "mean_los_transfer": 0.0,
             "mean_boarding_time": 0.0, "max_boarding_time": 0.0,
             "total_boarding_events": 0, "p_boarding": 0.0,
             "mean_handover_delay": 0.0, "max_handover_delay": 0.0,

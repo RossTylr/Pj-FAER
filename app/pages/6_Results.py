@@ -313,21 +313,33 @@ with flow_cols[0]:
 
 with flow_cols[1]:
     st.subheader("Disposition")
-    ci_admit = compute_ci(results["admitted"])
-    ci_disch = compute_ci(results["discharged"])
-
+    # Expanded 5-way disposition breakdown
     disp_data = pd.DataFrame({
-        "Outcome": ["Admitted", "Discharged"],
-        "Count": [ci_admit["mean"], ci_disch["mean"]],
+        "Outcome": ["Discharged", "Ward", "ICU", "Transfer", "Left"],
+        "Count": [
+            np.mean(results.get("discharged_count", results.get("discharged", [0]*n_reps))),
+            np.mean(results.get("admitted_ward_count", [0]*n_reps)),
+            np.mean(results.get("admitted_icu_count", [0]*n_reps)),
+            np.mean(results.get("transfer_count", [0]*n_reps)),
+            np.mean(results.get("left_count", [0]*n_reps)),
+        ]
     })
+    # Filter out zero counts for cleaner display
+    disp_data = disp_data[disp_data["Count"] > 0]
 
     fig = px.pie(
         disp_data,
         values="Count",
         names="Outcome",
-        title="Mean Departures by Outcome",
+        title="Mean Departures by Disposition",
         color="Outcome",
-        color_discrete_map={"Admitted": "#636efa", "Discharged": "#00cc96"},
+        color_discrete_map={
+            "Discharged": "#00cc96",
+            "Ward": "#636efa",
+            "ICU": "#ff4b4b",
+            "Transfer": "#ffa62b",
+            "Left": "#ab63fa"
+        },
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -349,15 +361,183 @@ with throughput_cols[2]:
     st.metric("95th Percentile System Time", f"{ci['mean']:.1f} min")
     st.caption(f"95% CI: [{ci['ci_lower']:.1f}, {ci['ci_upper']:.1f}]")
 
+# Length of Stay by Disposition (if data available)
+if "mean_los_discharged" in results:
+    st.markdown("---")
+    st.subheader("Length of Stay by Disposition")
+    los_cols = st.columns(4)
+
+    los_metrics = [
+        ("Discharged", "mean_los_discharged"),
+        ("Ward", "mean_los_ward"),
+        ("ICU", "mean_los_icu"),
+        ("Transfer", "mean_los_transfer"),
+    ]
+
+    for i, (label, key) in enumerate(los_metrics):
+        with los_cols[i]:
+            los_values = results.get(key, [0]*n_reps)
+            if np.mean(los_values) > 0:
+                ci = compute_ci(los_values)
+                st.metric(f"{label} LoS", f"{ci['mean']:.0f} min")
+                st.caption(f"({ci['mean']/60:.1f} hrs)")
+
+st.divider()
+
+# ===== ACUITY STATISTICS =====
+st.header("Acuity Statistics")
+st.caption("Performance by clinical acuity level (assigned at arrival)")
+
+# Acuity labels and descriptions
+ACUITY_INFO = {
+    "resus": ("Resus", "Immediate life-threatening", "#ff4b4b"),
+    "majors": ("Majors", "Urgent/serious conditions", "#ffa62b"),
+    "minors": ("Minors", "Standard/ambulatory", "#29b09d"),
+}
+
+# Build acuity statistics table
+acuity_stats = []
+for acuity_key in ["resus", "majors", "minors"]:
+    label, desc, _ = ACUITY_INFO[acuity_key]
+    arrivals = np.mean(results.get(f"arrivals_{acuity_key}", [0]*n_reps))
+    departures = np.mean(results.get(f"departures_{acuity_key}", [0]*n_reps))
+    mean_wait_data = results.get(f"{acuity_key}_mean_wait", [0]*n_reps)
+    p95_wait_data = results.get(f"{acuity_key}_p95_wait", [0]*n_reps)
+    sys_time_data = results.get(f"{acuity_key}_mean_system_time", [0]*n_reps)
+
+    acuity_stats.append({
+        "Acuity": label,
+        "Description": desc,
+        "Arrivals": f"{arrivals:.0f}",
+        "Departures": f"{departures:.0f}",
+        "Mean Wait (min)": f"{np.mean(mean_wait_data):.1f}",
+        "P95 Wait (min)": f"{np.mean(p95_wait_data):.1f}",
+        "Mean System Time (min)": f"{np.mean(sys_time_data):.0f}",
+    })
+
+acuity_df = pd.DataFrame(acuity_stats)
+st.dataframe(acuity_df, use_container_width=True, hide_index=True)
+
+# Acuity wait time comparison chart
+acuity_wait_data = pd.DataFrame({
+    "Acuity": ["Resus", "Majors", "Minors"],
+    "Mean Wait": [
+        np.mean(results.get("resus_mean_wait", [0]*n_reps)),
+        np.mean(results.get("majors_mean_wait", [0]*n_reps)),
+        np.mean(results.get("minors_mean_wait", [0]*n_reps)),
+    ],
+    "P95 Wait": [
+        np.mean(results.get("resus_p95_wait", [0]*n_reps)),
+        np.mean(results.get("majors_p95_wait", [0]*n_reps)),
+        np.mean(results.get("minors_p95_wait", [0]*n_reps)),
+    ],
+})
+
+fig = px.bar(
+    acuity_wait_data,
+    x="Acuity",
+    y=["Mean Wait", "P95 Wait"],
+    barmode="group",
+    title="Wait Times by Acuity Level",
+    color_discrete_map={"Mean Wait": "#636efa", "P95 Wait": "#ffa62b"},
+    labels={"value": "Wait Time (min)", "variable": "Metric"},
+)
+st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+
+# ===== PRIORITY STATISTICS =====
+st.header("Priority Statistics")
+st.caption("Performance by triage priority level | NHS breach targets (P1=0min, P2=10min, P3=60min, P4=120min)")
+
+# NHS Standard Targets
+PRIORITY_TARGETS = {"P1": 0, "P2": 10, "P3": 60, "P4": 120}
+PRIORITY_LABELS = {
+    "P1": "P1 - Immediate",
+    "P2": "P2 - Very Urgent",
+    "P3": "P3 - Urgent",
+    "P4": "P4 - Standard",
+}
+
+# Build priority statistics table
+priority_stats = []
+for p in ["P1", "P2", "P3", "P4"]:
+    arrivals = np.mean(results.get(f"arrivals_{p}", [0]*n_reps))
+    departures = np.mean(results.get(f"departures_{p}", [0]*n_reps))
+    mean_wait_data = results.get(f"{p}_mean_wait", [0]*n_reps)
+    p95_wait_data = results.get(f"{p}_p95_wait", [0]*n_reps)
+    breach_data = results.get(f"{p}_breach_rate", [0]*n_reps)
+    sys_time_data = results.get(f"{p}_mean_system_time", [0]*n_reps)
+
+    priority_stats.append({
+        "Priority": PRIORITY_LABELS[p],
+        "Target (min)": PRIORITY_TARGETS[p],
+        "Arrivals": f"{arrivals:.0f}",
+        "Departures": f"{departures:.0f}",
+        "Mean Wait (min)": f"{np.mean(mean_wait_data):.1f}",
+        "P95 Wait (min)": f"{np.mean(p95_wait_data):.1f}",
+        "Breach Rate": f"{np.mean(breach_data):.1%}",
+        "Mean System Time (min)": f"{np.mean(sys_time_data):.0f}",
+    })
+
+priority_df = pd.DataFrame(priority_stats)
+st.dataframe(priority_df, use_container_width=True, hide_index=True)
+
+# Breach rate visualization
+breach_data_chart = pd.DataFrame({
+    "Priority": ["P1", "P2", "P3", "P4"],
+    "Breach Rate": [
+        np.mean(results.get("P1_breach_rate", [0]*n_reps)),
+        np.mean(results.get("P2_breach_rate", [0]*n_reps)),
+        np.mean(results.get("P3_breach_rate", [0]*n_reps)),
+        np.mean(results.get("P4_breach_rate", [0]*n_reps)),
+    ],
+    "Target Wait (min)": [0, 10, 60, 120],
+})
+
+fig = px.bar(
+    breach_data_chart,
+    x="Priority",
+    y="Breach Rate",
+    title="Breach Rates by Priority (% exceeding NHS target)",
+    color="Breach Rate",
+    color_continuous_scale=["#00cc96", "#ffa62b", "#ff4b4b"],
+)
+fig.update_layout(yaxis_tickformat=".0%")
+fig.add_hline(y=0.05, line_dash="dash", line_color="green", annotation_text="5% target")
+st.plotly_chart(fig, use_container_width=True)
+
 st.divider()
 
 # ===== DISTRIBUTION PLOTS =====
 st.header("Metric Distributions Across Replications")
 
-# Tabs for different metric groups
-dist_tab1, dist_tab2, dist_tab3 = st.tabs(["Wait Times", "System Time", "Utilisation"])
+# Build dynamic tab list based on active departments
+tab_names = ["Wait Times", "System Time", "Utilisation"]
 
-with dist_tab1:
+# Check if downstream has data (hide empty departments)
+has_downstream = any(
+    np.mean(get_util(k)) > 0 for k in ["util_theatre", "util_itu", "util_ward"]
+)
+if has_downstream:
+    tab_names.append("Downstream")
+
+# Check if diagnostics have data
+has_diagnostics = any(
+    np.mean(get_util(f"util_{dt}")) > 0
+    for dt in ["CT_SCAN", "XRAY", "BLOODS"]
+)
+if has_diagnostics:
+    tab_names.append("Diagnostics")
+
+# Priority tab always shown
+tab_names.append("Priority")
+
+dist_tabs = st.tabs(tab_names)
+tab_idx = 0
+
+# Wait Times tab
+with dist_tabs[tab_idx]:
     wait_cols = st.columns(2)
 
     with wait_cols[0]:
@@ -379,8 +559,10 @@ with dist_tab1:
         )
         fig.update_layout(showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
+tab_idx += 1
 
-with dist_tab2:
+# System Time tab
+with dist_tabs[tab_idx]:
     sys_cols = st.columns(2)
 
     with sys_cols[0]:
@@ -402,29 +584,91 @@ with dist_tab2:
         )
         fig.update_layout(showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
+tab_idx += 1
 
-with dist_tab3:
-    util_hist_cols = st.columns(2)
+# Utilisation tab (core resources always shown)
+with dist_tabs[tab_idx]:
+    st.subheader("Core Resource Utilisation")
+    util_cols = st.columns(3)
 
-    with util_hist_cols[0]:
-        fig = px.histogram(
-            results["util_ed_bays"],
-            nbins=20,
-            labels={"value": "Utilisation", "count": "Frequency"},
-            title="Distribution of ED Bays Utilisation",
-        )
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+    for i, (name, key) in enumerate([
+        ("ED Bays", "util_ed_bays"),
+        ("Triage", "util_triage"),
+        ("Handover", "util_handover"),
+    ]):
+        with util_cols[i]:
+            fig = px.histogram(
+                get_util(key),
+                nbins=20,
+                labels={"value": "Utilisation", "count": "Frequency"},
+                title=f"{name} Utilisation Distribution",
+            )
+            fig.update_layout(showlegend=False, xaxis_tickformat=".0%")
+            st.plotly_chart(fig, use_container_width=True)
+tab_idx += 1
 
-    with util_hist_cols[1]:
-        fig = px.histogram(
-            results["util_handover"],
-            nbins=20,
-            labels={"value": "Utilisation", "count": "Frequency"},
-            title="Distribution of Handover Utilisation",
-        )
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+# Downstream tab (conditional)
+if has_downstream:
+    with dist_tabs[tab_idx]:
+        st.subheader("Downstream Resource Distributions")
+        # Only show departments with data
+        active_downstream = []
+        for name, key in [("Theatre", "util_theatre"), ("ITU", "util_itu"), ("Ward", "util_ward")]:
+            if np.mean(get_util(key)) > 0:
+                active_downstream.append((name, key))
+
+        if active_downstream:
+            ds_cols = st.columns(len(active_downstream))
+            for i, (name, key) in enumerate(active_downstream):
+                with ds_cols[i]:
+                    fig = px.histogram(
+                        get_util(key),
+                        nbins=20,
+                        labels={"value": "Utilisation", "count": "Frequency"},
+                        title=f"{name} Utilisation Distribution",
+                    )
+                    fig.update_layout(showlegend=False, xaxis_tickformat=".0%")
+                    st.plotly_chart(fig, use_container_width=True)
+    tab_idx += 1
+
+# Diagnostics tab (conditional)
+if has_diagnostics:
+    with dist_tabs[tab_idx]:
+        st.subheader("Diagnostics Resource Distributions")
+        active_diag = []
+        for name, key in [("CT Scanner", "util_CT_SCAN"), ("X-ray", "util_XRAY"), ("Bloods", "util_BLOODS")]:
+            if np.mean(get_util(key)) > 0:
+                active_diag.append((name, key))
+
+        if active_diag:
+            diag_cols = st.columns(len(active_diag))
+            for i, (name, key) in enumerate(active_diag):
+                with diag_cols[i]:
+                    fig = px.histogram(
+                        get_util(key),
+                        nbins=20,
+                        labels={"value": "Utilisation", "count": "Frequency"},
+                        title=f"{name} Utilisation Distribution",
+                    )
+                    fig.update_layout(showlegend=False, xaxis_tickformat=".0%")
+                    st.plotly_chart(fig, use_container_width=True)
+    tab_idx += 1
+
+# Priority tab (always shown)
+with dist_tabs[tab_idx]:
+    st.subheader("Wait Time Distributions by Priority")
+    p_cols = st.columns(4)
+    for i, p in enumerate(["P1", "P2", "P3", "P4"]):
+        with p_cols[i]:
+            wait_data = results.get(f"{p}_mean_wait", [0]*n_reps)
+            fig = px.histogram(
+                wait_data,
+                nbins=15,
+                labels={"value": "Wait (min)", "count": "Frequency"},
+                title=f"{p} Mean Wait Distribution",
+            )
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
@@ -852,6 +1096,16 @@ export_df = pd.DataFrame({
     "arrivals_resus": results["arrivals_resus"],
     "arrivals_majors": results["arrivals_majors"],
     "arrivals_minors": results["arrivals_minors"],
+    # Priority arrivals and departures
+    "arrivals_P1": results.get("arrivals_P1", [0] * n_reps),
+    "arrivals_P2": results.get("arrivals_P2", [0] * n_reps),
+    "arrivals_P3": results.get("arrivals_P3", [0] * n_reps),
+    "arrivals_P4": results.get("arrivals_P4", [0] * n_reps),
+    "departures_P1": results.get("departures_P1", [0] * n_reps),
+    "departures_P2": results.get("departures_P2", [0] * n_reps),
+    "departures_P3": results.get("departures_P3", [0] * n_reps),
+    "departures_P4": results.get("departures_P4", [0] * n_reps),
+    # Core metrics
     "p_delay": results["p_delay"],
     "mean_triage_wait": results["mean_triage_wait"],
     "mean_treatment_wait": results["mean_treatment_wait"],
@@ -860,6 +1114,47 @@ export_df = pd.DataFrame({
     "admission_rate": results["admission_rate"],
     "admitted": results["admitted"],
     "discharged": results["discharged"],
+    # Detailed disposition
+    "discharged_count": results.get("discharged_count", results.get("discharged", [0] * n_reps)),
+    "admitted_ward_count": results.get("admitted_ward_count", [0] * n_reps),
+    "admitted_icu_count": results.get("admitted_icu_count", [0] * n_reps),
+    "transfer_count": results.get("transfer_count", [0] * n_reps),
+    "left_count": results.get("left_count", [0] * n_reps),
+    # LoS by disposition
+    "mean_los_discharged": results.get("mean_los_discharged", [0] * n_reps),
+    "mean_los_ward": results.get("mean_los_ward", [0] * n_reps),
+    "mean_los_icu": results.get("mean_los_icu", [0] * n_reps),
+    "mean_los_transfer": results.get("mean_los_transfer", [0] * n_reps),
+    # P1-P4 extended statistics
+    "P1_mean_wait": results.get("P1_mean_wait", [0] * n_reps),
+    "P2_mean_wait": results.get("P2_mean_wait", [0] * n_reps),
+    "P3_mean_wait": results.get("P3_mean_wait", [0] * n_reps),
+    "P4_mean_wait": results.get("P4_mean_wait", [0] * n_reps),
+    "P1_p95_wait": results.get("P1_p95_wait", [0] * n_reps),
+    "P2_p95_wait": results.get("P2_p95_wait", [0] * n_reps),
+    "P3_p95_wait": results.get("P3_p95_wait", [0] * n_reps),
+    "P4_p95_wait": results.get("P4_p95_wait", [0] * n_reps),
+    "P1_breach_rate": results.get("P1_breach_rate", [0] * n_reps),
+    "P2_breach_rate": results.get("P2_breach_rate", [0] * n_reps),
+    "P3_breach_rate": results.get("P3_breach_rate", [0] * n_reps),
+    "P4_breach_rate": results.get("P4_breach_rate", [0] * n_reps),
+    "P1_mean_system_time": results.get("P1_mean_system_time", [0] * n_reps),
+    "P2_mean_system_time": results.get("P2_mean_system_time", [0] * n_reps),
+    "P3_mean_system_time": results.get("P3_mean_system_time", [0] * n_reps),
+    "P4_mean_system_time": results.get("P4_mean_system_time", [0] * n_reps),
+    # Acuity extended statistics
+    "resus_mean_wait": results.get("resus_mean_wait", [0] * n_reps),
+    "majors_mean_wait": results.get("majors_mean_wait", [0] * n_reps),
+    "minors_mean_wait": results.get("minors_mean_wait", [0] * n_reps),
+    "resus_p95_wait": results.get("resus_p95_wait", [0] * n_reps),
+    "majors_p95_wait": results.get("majors_p95_wait", [0] * n_reps),
+    "minors_p95_wait": results.get("minors_p95_wait", [0] * n_reps),
+    "resus_mean_system_time": results.get("resus_mean_system_time", [0] * n_reps),
+    "majors_mean_system_time": results.get("majors_mean_system_time", [0] * n_reps),
+    "minors_mean_system_time": results.get("minors_mean_system_time", [0] * n_reps),
+    "departures_resus": results.get("departures_resus", [0] * n_reps),
+    "departures_majors": results.get("departures_majors", [0] * n_reps),
+    "departures_minors": results.get("departures_minors", [0] * n_reps),
     # Emergency Services
     "util_ambulance_fleet": get_util("util_ambulance_fleet"),
     "util_helicopter_fleet": get_util("util_helicopter_fleet"),

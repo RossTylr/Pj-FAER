@@ -53,6 +53,24 @@ def multiple_replications(
                 "aeromed_total", "aeromed_slots_missed",
                 "mean_aeromed_slot_wait", "max_aeromed_slot_wait",
                 "ward_bed_days_blocked_aeromed",
+                # P1-P4 Priority Statistics (Phase 4 enhancement)
+                "arrivals_P1", "arrivals_P2", "arrivals_P3", "arrivals_P4",
+                "departures_P1", "departures_P2", "departures_P3", "departures_P4",
+                "P1_mean_wait", "P2_mean_wait", "P3_mean_wait", "P4_mean_wait",
+                "P1_p95_wait", "P2_p95_wait", "P3_p95_wait", "P4_p95_wait",
+                "P1_max_wait", "P2_max_wait", "P3_max_wait", "P4_max_wait",
+                "P1_breach_rate", "P2_breach_rate", "P3_breach_rate", "P4_breach_rate",
+                "P1_mean_system_time", "P2_mean_system_time", "P3_mean_system_time", "P4_mean_system_time",
+                # Acuity Statistics (Phase 4 enhancement)
+                "departures_resus", "departures_majors", "departures_minors",
+                "resus_mean_wait", "majors_mean_wait", "minors_mean_wait",
+                "resus_p95_wait", "majors_p95_wait", "minors_p95_wait",
+                "resus_max_wait", "majors_max_wait", "minors_max_wait",
+                "resus_mean_system_time", "majors_mean_system_time", "minors_mean_system_time",
+                # Disposition breakdown (Phase 4 enhancement)
+                "discharged_count", "admitted_ward_count", "admitted_icu_count",
+                "transfer_count", "left_count",
+                "mean_los_discharged", "mean_los_ward", "mean_los_icu",
             ]
         else:
             metric_names = ["p_delay", "mean_queue_time", "utilisation"]
