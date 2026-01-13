@@ -163,55 +163,55 @@ def main():
     # Convert to dict for React component
     data_dict = to_dict(data)
 
-    # Main layout
-    col1, col2 = st.columns([4, 1])
+    # Full-width schematic (1400x1000 viewBox, 20% larger elements)
+    clicked = react_schematic(
+        data=data_dict,
+        width=1400,
+        height=750,
+        key="main_schematic",
+    )
 
-    with col1:
-        # Render React schematic - wider for left-to-right layout
-        clicked = react_schematic(
-            data=data_dict,
-            width=950,
-            height=500,
-            key="main_schematic",
-        )
+    # Node details below schematic
+    if clicked and clicked in data.nodes:
+        st.markdown("---")
+        node = data.nodes[clicked]
 
-        if clicked:
-            st.info(f"Selected node: **{clicked}**")
+        # Horizontal layout for node details
+        col1, col2, col3, col4 = st.columns(4)
 
-    with col2:
-        st.markdown("### Node Details")
-
-        if clicked and clicked in data.nodes:
-            node = data.nodes[clicked]
-            st.markdown(f"**{node.label}**")
+        with col1:
+            st.markdown(f"### {node.label}")
             st.markdown(f"Type: `{node.node_type}`")
 
+        with col2:
             if node.capacity:
                 st.metric("Utilisation", f"{node.utilisation:.0%}")
                 st.progress(node.utilisation)
+            else:
+                st.metric("Throughput", f"{node.throughput_per_hour:.1f}/hr")
 
+        with col3:
             st.metric("Mean Wait", f"{node.mean_wait_mins:.1f} min")
-            st.metric("Throughput", f"{node.throughput_per_hour:.1f}/hr")
+            if node.capacity:
+                st.metric("Occupied", f"{node.occupied}/{node.capacity}")
 
+        with col4:
             # Show connected edges
-            st.markdown("---")
             st.markdown("**Flows**")
             incoming = [e for e in data.edges if e.target == clicked]
             outgoing = [e for e in data.edges if e.source == clicked]
 
             if incoming:
-                st.markdown("*Incoming:*")
                 for e in incoming:
                     status = "🔴" if e.is_blocked else "🟢"
-                    st.markdown(f"- {status} {data.nodes[e.source].label}: {e.volume_per_hour:.1f}/hr")
+                    st.markdown(f"{status} ← {data.nodes[e.source].label}: {e.volume_per_hour:.1f}/hr")
 
             if outgoing:
-                st.markdown("*Outgoing:*")
                 for e in outgoing:
                     status = "🔴" if e.is_blocked else "🟢"
-                    st.markdown(f"- {status} → {data.nodes[e.target].label}: {e.volume_per_hour:.1f}/hr")
-        else:
-            st.markdown("*Click a node in the schematic to see details*")
+                    st.markdown(f"{status} → {data.nodes[e.target].label}: {e.volume_per_hour:.1f}/hr")
+    else:
+        st.caption("*Click a node in the schematic to see details*")
 
     # Technical notes
     with st.expander("📋 Technical Notes"):

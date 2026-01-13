@@ -53,31 +53,44 @@ interface SchematicProps extends ComponentProps {
 
 // === CONFIGURATION ===
 
-// Node positions - Left-to-right crucifix layout
+// ViewBox dimensions for responsive scaling
+// Canvas: 1400x1000, schematic scaled 20% larger
+const VIEWBOX_WIDTH = 1400;
+const VIEWBOX_HEIGHT = 1000;
+
+// Node positions - Left-to-right crucifix layout with Theatre as center
+// Using 270px spacing (225 × 1.2 = 20% larger)
 //
-//                    [ITU]
-//                      ↑
+//                              [ITU]
+//                                ↑
 // [Arrivals] → [Triage] → [ED Bays] → [Theatre] → [Discharge]
-//                      ↓
-//                   [Ward]
+//                                ↓
+//                             [Ward]
 //
+// Horizontal: 270px between node centers on main lane
+// Vertical: 270px from Theatre to ITU/Ward
+// Canvas: 1400x1000, main lane at y=500 (centered)
+//
+const SPACING = 270;
+const MAIN_Y = 500;
+
 const NODE_POSITIONS: Record<string, { x: number; y: number; col: number; lane: string }> = {
-  // Entry column (left, stacked vertically)
-  ambulance: { x: 70, y: 160, col: 0, lane: "entry" },
-  walkin: { x: 70, y: 250, col: 0, lane: "entry" },
-  hems: { x: 70, y: 340, col: 0, lane: "entry" },
-  // Triage (assessment)
-  triage: { x: 220, y: 250, col: 1, lane: "main" },
-  // ED Bays (center hub)
-  ed_bays: { x: 380, y: 250, col: 2, lane: "main" },
-  // ITU (top arm of crucifix)
-  itu: { x: 380, y: 100, col: 2, lane: "top" },
-  // Ward (bottom arm of crucifix)
-  ward: { x: 380, y: 400, col: 2, lane: "bottom" },
-  // Theatre (surgery, continues main flow)
-  theatre: { x: 540, y: 250, col: 3, lane: "main" },
-  // Discharge (exit, far right)
-  discharge: { x: 700, y: 250, col: 4, lane: "main" },
+  // Entry column (left, stacked vertically) - x=120
+  ambulance: { x: 120, y: MAIN_Y - 120, col: 0, lane: "entry" },
+  walkin: { x: 120, y: MAIN_Y, col: 0, lane: "entry" },
+  hems: { x: 120, y: MAIN_Y + 120, col: 0, lane: "entry" },
+  // Triage (assessment) - x=120 + 270 = 390
+  triage: { x: 120 + SPACING, y: MAIN_Y, col: 1, lane: "main" },
+  // ED Bays - x=390 + 270 = 660
+  ed_bays: { x: 120 + SPACING * 2, y: MAIN_Y, col: 2, lane: "main" },
+  // Theatre (center hub of crucifix) - x=660 + 270 = 930
+  theatre: { x: 120 + SPACING * 3, y: MAIN_Y, col: 3, lane: "main" },
+  // ITU (top arm of crucifix - above Theatre)
+  itu: { x: 120 + SPACING * 3, y: MAIN_Y - SPACING, col: 3, lane: "top" },
+  // Ward (bottom arm of crucifix - below Theatre)
+  ward: { x: 120 + SPACING * 3, y: MAIN_Y + SPACING, col: 3, lane: "bottom" },
+  // Discharge (exit, far right) - x=930 + 270 = 1200
+  discharge: { x: 120 + SPACING * 4, y: MAIN_Y, col: 4, lane: "main" },
 };
 
 const STATUS_COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
@@ -91,13 +104,14 @@ const NODE_TYPE_COLORS: Record<string, { fill: string; stroke: string; text: str
   exit: { fill: "#f3e5f5", stroke: "#7b1fa2", text: "#6a1b9a" },
 };
 
-const NODE_WIDTH = 130;
-const NODE_HEIGHT = 90;
+// Node dimensions (20% larger: 130×90 → 156×108)
+const NODE_WIDTH = 156;
+const NODE_HEIGHT = 108;
 
 // === MAIN COMPONENT ===
 
 const Schematic: React.FC<SchematicProps> = ({ args }) => {
-  const { data, width, height } = args;
+  const { data, height } = args;
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
@@ -269,8 +283,8 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
     const scale = isHovered ? 1.02 : 1;
     const shadowOpacity = isHovered ? 0.2 : 0.1;
 
-    // Calculate utilisation bar width
-    const utilBarWidth = (NODE_WIDTH - 20) * node.utilisation;
+    // Calculate utilisation bar width (matches bar padding of 12px on each side)
+    const utilBarWidth = (NODE_WIDTH - 24) * node.utilisation;
 
     return (
       <g
@@ -284,11 +298,11 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
       >
         {/* Drop shadow */}
         <rect
-          x={2}
-          y={2}
+          x={3}
+          y={3}
           width={NODE_WIDTH}
           height={NODE_HEIGHT}
-          rx={8}
+          rx={10}
           fill="black"
           fillOpacity={shadowOpacity}
         />
@@ -297,7 +311,7 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
         <rect
           width={NODE_WIDTH}
           height={NODE_HEIGHT}
-          rx={8}
+          rx={10}
           fill={colors.fill}
           stroke={colors.stroke}
           strokeWidth={isSelected ? 3 : 2}
@@ -307,32 +321,32 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
         {/* Selection indicator */}
         {isSelected && (
           <rect
-            x={-2}
-            y={-2}
-            width={NODE_WIDTH + 4}
-            height={NODE_HEIGHT + 4}
-            rx={10}
+            x={-3}
+            y={-3}
+            width={NODE_WIDTH + 6}
+            height={NODE_HEIGHT + 6}
+            rx={12}
             fill="none"
             stroke={colors.stroke}
             strokeWidth={1}
-            strokeDasharray="4,2"
+            strokeDasharray="5,3"
           />
         )}
 
         {/* Status indicator dot */}
         <circle
-          cx={NODE_WIDTH - 15}
-          cy={15}
-          r={6}
+          cx={NODE_WIDTH - 18}
+          cy={18}
+          r={7}
           fill={STATUS_COLORS[node.status]?.stroke || "#666"}
         />
 
         {/* Label */}
         <text
           x={NODE_WIDTH / 2}
-          y={22}
+          y={26}
           textAnchor="middle"
-          fontSize={13}
+          fontSize={16}
           fontWeight="bold"
           fill={colors.text}
           className="node-label"
@@ -344,19 +358,19 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
         {node.capacity && (
           <>
             <rect
-              x={10}
-              y={35}
-              width={NODE_WIDTH - 20}
-              height={10}
-              rx={5}
+              x={12}
+              y={42}
+              width={NODE_WIDTH - 24}
+              height={12}
+              rx={6}
               fill="#e9ecef"
             />
             <rect
-              x={10}
-              y={35}
+              x={12}
+              y={42}
               width={utilBarWidth}
-              height={10}
-              rx={5}
+              height={12}
+              rx={6}
               fill={STATUS_COLORS[node.status]?.stroke || "#28a745"}
               className="util-bar"
             />
@@ -366,9 +380,9 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
         {/* Capacity/throughput text */}
         <text
           x={NODE_WIDTH / 2}
-          y={60}
+          y={72}
           textAnchor="middle"
-          fontSize={12}
+          fontSize={14}
           fill="#333"
         >
           {node.capacity
@@ -379,9 +393,9 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
         {/* Wait time */}
         <text
           x={NODE_WIDTH / 2}
-          y={78}
+          y={94}
           textAnchor="middle"
-          fontSize={10}
+          fontSize={12}
           fill="#666"
         >
           {node.mean_wait_mins > 0 ? `Wait: ${node.mean_wait_mins.toFixed(0)}m` : ""}
@@ -392,30 +406,30 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
 
   // === RENDER LEGEND ===
   const renderLegend = () => (
-    <g transform="translate(780, 70)">
+    <g transform={`translate(${VIEWBOX_WIDTH - 145}, 60)`}>
       <rect
-        width={105}
-        height={150}
+        width={126}
+        height={180}
         fill="white"
         stroke="#dee2e6"
-        rx={6}
+        rx={8}
         fillOpacity={0.95}
       />
-      <text x={10} y={18} fontSize={10} fontWeight="bold" fill="#333">
+      <text x={12} y={22} fontSize={12} fontWeight="bold" fill="#333">
         Legend
       </text>
-      <circle cx={18} cy={36} r={4} fill="#28a745" />
-      <text x={28} y={40} fontSize={9} fill="#333">Normal (&lt;70%)</text>
-      <circle cx={18} cy={54} r={4} fill="#ffc107" />
-      <text x={28} y={58} fontSize={9} fill="#333">Warning (70-90%)</text>
-      <circle cx={18} cy={72} r={4} fill="#dc3545" />
-      <text x={28} y={76} fontSize={9} fill="#333">Critical (&gt;90%)</text>
-      <line x1={12} y1={92} x2={32} y2={92} stroke="#dc3545" strokeWidth={2} strokeDasharray="4,2" />
-      <text x={38} y={96} fontSize={9} fill="#333">Blocked</text>
-      <circle cx={18} cy={112} r={4} fill="#1976d2" />
-      <text x={28} y={116} fontSize={9} fill="#333">Entry</text>
-      <circle cx={18} cy={130} r={4} fill="#7b1fa2" />
-      <text x={28} y={134} fontSize={9} fill="#333">Exit</text>
+      <circle cx={22} cy={44} r={5} fill="#28a745" />
+      <text x={34} y={48} fontSize={11} fill="#333">Normal (&lt;70%)</text>
+      <circle cx={22} cy={66} r={5} fill="#ffc107" />
+      <text x={34} y={70} fontSize={11} fill="#333">Warning (70-90%)</text>
+      <circle cx={22} cy={88} r={5} fill="#dc3545" />
+      <text x={34} y={92} fontSize={11} fill="#333">Critical (&gt;90%)</text>
+      <line x1={14} y1={112} x2={38} y2={112} stroke="#dc3545" strokeWidth={2} strokeDasharray="5,3" />
+      <text x={46} y={116} fontSize={11} fill="#333">Blocked</text>
+      <circle cx={22} cy={136} r={5} fill="#1976d2" />
+      <text x={34} y={140} fontSize={11} fill="#333">Entry</text>
+      <circle cx={22} cy={158} r={5} fill="#7b1fa2" />
+      <text x={34} y={162} fontSize={11} fill="#333">Exit</text>
     </g>
   );
 
@@ -423,21 +437,17 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
   const renderHeader = () => {
     const statusColor = STATUS_COLORS[data.overall_status]?.stroke || "#666";
     return (
-      <g transform="translate(20, 10)">
-        <text fontSize={16} fontWeight="bold" fill="#333">
-          System Schematic — {data.timestamp}
+      <g transform="translate(24, 22)">
+        <text fontSize={14} fill="#666">
+          <tspan fontWeight="bold" fill="#333">{data.timestamp}</tspan>
+          <tspan dx={18}>|</tspan>
+          <tspan dx={18}>{data.total_in_system} in system</tspan>
+          <tspan dx={18}>|</tspan>
+          <tspan dx={18}>{data.total_throughput_24h}/24hr</tspan>
+          <tspan dx={18}>|</tspan>
+          <tspan dx={18}>Status: </tspan>
+          <tspan fontWeight="bold" fill={statusColor}>{data.overall_status.toUpperCase()}</tspan>
         </text>
-        <g transform="translate(0, 22)">
-          <text fontSize={11} fill="#666">
-            In System: <tspan fontWeight="bold" fill="#333">{data.total_in_system}</tspan>
-          </text>
-          <text x={120} fontSize={11} fill="#666">
-            |  24hr Throughput: <tspan fontWeight="bold" fill="#333">{data.total_throughput_24h}</tspan>
-          </text>
-          <text x={300} fontSize={11} fill="#666">
-            |  Status: <tspan fontWeight="bold" fill={statusColor}>{data.overall_status.toUpperCase()}</tspan>
-          </text>
-        </g>
       </g>
     );
   };
@@ -445,8 +455,10 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
   // === MAIN RENDER ===
   return (
     <svg
-      width={width}
-      height={height}
+      viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
+      width="100%"
+      height="100%"
+      preserveAspectRatio="xMidYMid meet"
       style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: "#fafafa" }}
       className="schematic-svg"
     >
@@ -485,19 +497,10 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
       </defs>
 
       {/* Background */}
-      <rect width={width} height={height} fill="#fafafa" />
+      <rect width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} fill="#fafafa" />
 
       {/* Header */}
       {renderHeader()}
-
-      {/* Section labels - positioned above each column */}
-      <text x={70} y={105} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">ARRIVALS</text>
-      <text x={220} y={195} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">ASSESS</text>
-      <text x={380} y={55} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">ITU</text>
-      <text x={380} y={195} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">EMERGENCY</text>
-      <text x={380} y={455} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">WARD</text>
-      <text x={540} y={195} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">SURGERY</text>
-      <text x={700} y={195} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">EXIT</text>
 
       {/* Edges (rendered behind nodes) */}
       <g className="edges-layer">
