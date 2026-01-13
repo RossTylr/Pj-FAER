@@ -167,11 +167,11 @@ def main():
     col1, col2 = st.columns([4, 1])
 
     with col1:
-        # Render React schematic
+        # Render React schematic - wider for left-to-right layout
         clicked = react_schematic(
             data=data_dict,
-            width=900,
-            height=550,
+            width=950,
+            height=500,
             key="main_schematic",
         )
 
@@ -240,12 +240,21 @@ def main():
 
 
 def render_fallback_schematic():
-    """Render a fallback SVG schematic when React component isn't built."""
+    """Render a fallback SVG schematic when React component isn't built.
+
+    Layout: Left-to-right crucifix pattern
+
+                              [ITU]
+                                ↑
+    [Arrivals] → [Triage] → [ED Bays] → [Theatre] → [Discharge]
+                                ↓
+                             [Ward]
+    """
     data = create_sample_data()
 
-    # Build inline SVG
+    # Build inline SVG - left-to-right crucifix layout
     svg_content = """
-    <svg width="900" height="550" style="font-family: system-ui; background: #fafafa;">
+    <svg width="1000" height="480" style="font-family: system-ui; background: #fafafa;">
         <defs>
             <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
                 <path d="M0,0 L0,6 L9,3 z" fill="#adb5bd"/>
@@ -256,124 +265,157 @@ def render_fallback_schematic():
         </defs>
 
         <!-- Header -->
-        <text x="20" y="30" font-size="18" font-weight="bold" fill="#333">🏥 System Schematic — Hour 14.5</text>
-        <text x="20" y="50" font-size="12" fill="#666">In System: <tspan font-weight="bold" fill="#333">73</tspan></text>
+        <text x="20" y="25" font-size="16" font-weight="bold" fill="#333">System Schematic — Hour 14.5</text>
+        <text x="20" y="45" font-size="11" fill="#666">In System: <tspan font-weight="bold" fill="#333">73</tspan>  |  24hr Throughput: <tspan font-weight="bold" fill="#333">432</tspan></text>
+
+        <!-- === MAIN HORIZONTAL FLOW (Y=235 center line) === -->
+
+        <!-- Arrivals → Triage -->
+        <path d="M 120 235 L 175 235" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+        <!-- Triage → ED -->
+        <path d="M 295 235 L 355 235" stroke="#adb5bd" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+
+        <!-- ED → Theatre -->
+        <path d="M 475 235 L 535 235" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+        <!-- Theatre → Discharge -->
+        <path d="M 655 235 L 715 235" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+        <!-- === VERTICAL FLOWS FROM ED (crucifix arms) === -->
+
+        <!-- ED → ITU (up) - BLOCKED -->
+        <path d="M 415 185 L 415 130" stroke="#dc3545" stroke-width="2" stroke-dasharray="6,3" fill="none" marker-end="url(#blocked-arrow)"/>
+
+        <!-- ED → Ward (down) -->
+        <path d="M 415 285 L 415 340" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+        <!-- === SECONDARY FLOWS === -->
+
+        <!-- Theatre → ITU (curved up-left) - BLOCKED -->
+        <path d="M 560 185 C 560 130, 480 90, 480 90" stroke="#dc3545" stroke-width="1.5" stroke-dasharray="4,2" fill="none" marker-end="url(#blocked-arrow)"/>
+
+        <!-- ITU → Ward (curved down) - BLOCKED -->
+        <path d="M 350 90 C 310 90, 310 350, 350 390" stroke="#dc3545" stroke-width="1.5" stroke-dasharray="4,2" fill="none" marker-end="url(#blocked-arrow)"/>
+
+        <!-- Ward → Discharge (curved right) -->
+        <path d="M 480 390 C 600 390, 750 320, 780 275" stroke="#adb5bd" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+        <!-- ITU → Discharge (curved right) -->
+        <path d="M 480 70 C 600 50, 750 150, 780 195" stroke="#adb5bd" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+        <!-- === ARRIVALS (left side, stacked vertically) === -->
+        <g transform="translate(20, 135)">
+            <rect width="100" height="50" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
+            <circle cx="88" cy="12" r="5" fill="#28a745"/>
+            <text x="50" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="#1565c0">Ambulance</text>
+            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">12.0/hr</text>
+        </g>
+
+        <g transform="translate(20, 210)">
+            <rect width="100" height="50" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
+            <circle cx="88" cy="12" r="5" fill="#28a745"/>
+            <text x="50" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="#1565c0">Walk-in</text>
+            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">8.0/hr</text>
+        </g>
+
+        <g transform="translate(20, 285)">
+            <rect width="100" height="50" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
+            <circle cx="88" cy="12" r="5" fill="#28a745"/>
+            <text x="50" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="#1565c0">HEMS</text>
+            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">0.5/hr</text>
+        </g>
+
+        <!-- === TRIAGE (assessment) === -->
+        <g transform="translate(180, 195)">
+            <rect width="110" height="80" rx="6" fill="#f0fff4" stroke="#28a745" stroke-width="2"/>
+            <circle cx="98" cy="12" r="5" fill="#28a745"/>
+            <text x="55" y="18" text-anchor="middle" font-size="12" font-weight="bold" fill="#166534">Triage</text>
+            <rect x="10" y="30" width="90" height="8" rx="4" fill="#e9ecef"/>
+            <rect x="10" y="30" width="45" height="8" rx="4" fill="#28a745"/>
+            <text x="55" y="52" text-anchor="middle" font-size="10" fill="#333">1/2 (50%)</text>
+            <text x="55" y="68" text-anchor="middle" font-size="9" fill="#666">Wait: 3m</text>
+        </g>
+
+        <!-- === ED BAYS (center - main hub) === -->
+        <g transform="translate(360, 190)">
+            <rect width="110" height="90" rx="6" fill="#fffbf0" stroke="#ffc107" stroke-width="3"/>
+            <circle cx="98" cy="12" r="5" fill="#ffc107"/>
+            <text x="55" y="18" text-anchor="middle" font-size="12" font-weight="bold" fill="#92400e">ED Bays</text>
+            <rect x="10" y="32" width="90" height="10" rx="5" fill="#e9ecef"/>
+            <rect x="10" y="32" width="72" height="10" rx="5" fill="#ffc107"/>
+            <text x="55" y="58" text-anchor="middle" font-size="10" fill="#333">24/30 (80%)</text>
+            <text x="55" y="76" text-anchor="middle" font-size="9" fill="#666">Wait: 23m</text>
+        </g>
+
+        <!-- === ITU (top arm of crucifix) - CRITICAL === -->
+        <g transform="translate(360, 45)">
+            <rect width="110" height="80" rx="6" fill="#fff5f5" stroke="#dc3545" stroke-width="2"/>
+            <circle cx="98" cy="12" r="5" fill="#dc3545"/>
+            <text x="55" y="18" text-anchor="middle" font-size="12" font-weight="bold" fill="#991b1b">ITU</text>
+            <rect x="10" y="30" width="90" height="8" rx="4" fill="#e9ecef"/>
+            <rect x="10" y="30" width="90" height="8" rx="4" fill="#dc3545"/>
+            <text x="55" y="52" text-anchor="middle" font-size="10" fill="#333">10/10 (100%)</text>
+            <text x="55" y="68" text-anchor="middle" font-size="9" fill="#666">Wait: 120m</text>
+        </g>
+
+        <!-- === WARD (bottom arm of crucifix) === -->
+        <g transform="translate(360, 345)">
+            <rect width="110" height="80" rx="6" fill="#fffbf0" stroke="#ffc107" stroke-width="2"/>
+            <circle cx="98" cy="12" r="5" fill="#ffc107"/>
+            <text x="55" y="18" text-anchor="middle" font-size="12" font-weight="bold" fill="#92400e">Ward</text>
+            <rect x="10" y="30" width="90" height="8" rx="4" fill="#e9ecef"/>
+            <rect x="10" y="30" width="68" height="8" rx="4" fill="#ffc107"/>
+            <text x="55" y="52" text-anchor="middle" font-size="10" fill="#333">38/50 (76%)</text>
+            <text x="55" y="68" text-anchor="middle" font-size="9" fill="#666">Wait: 35m</text>
+        </g>
+
+        <!-- === THEATRE (surgery, right of ED) === -->
+        <g transform="translate(540, 195)">
+            <rect width="110" height="80" rx="6" fill="#f0fff4" stroke="#28a745" stroke-width="2"/>
+            <circle cx="98" cy="12" r="5" fill="#28a745"/>
+            <text x="55" y="18" text-anchor="middle" font-size="12" font-weight="bold" fill="#166534">Theatre</text>
+            <rect x="10" y="30" width="90" height="8" rx="4" fill="#e9ecef"/>
+            <rect x="10" y="30" width="45" height="8" rx="4" fill="#28a745"/>
+            <text x="55" y="52" text-anchor="middle" font-size="10" fill="#333">1/2 (50%)</text>
+            <text x="55" y="68" text-anchor="middle" font-size="9" fill="#666">Wait: 45m</text>
+        </g>
+
+        <!-- === DISCHARGE (exit, far right) === -->
+        <g transform="translate(720, 195)">
+            <rect width="100" height="80" rx="6" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2"/>
+            <circle cx="88" cy="12" r="5" fill="#28a745"/>
+            <text x="50" y="18" text-anchor="middle" font-size="12" font-weight="bold" fill="#6a1b9a">Discharge</text>
+            <text x="50" y="45" text-anchor="middle" font-size="14" font-weight="bold" fill="#333">15.0/hr</text>
+            <text x="50" y="65" text-anchor="middle" font-size="9" fill="#666">Exit</text>
+        </g>
+
+        <!-- Legend (bottom right) -->
+        <g transform="translate(830, 320)">
+            <rect width="155" height="115" fill="white" stroke="#dee2e6" rx="6" fill-opacity="0.95"/>
+            <text x="10" y="18" font-size="11" font-weight="bold" fill="#333">Legend</text>
+            <circle cx="18" cy="35" r="5" fill="#28a745"/>
+            <text x="30" y="39" font-size="9" fill="#333">Normal (&lt;70%)</text>
+            <circle cx="18" cy="52" r="5" fill="#ffc107"/>
+            <text x="30" y="56" font-size="9" fill="#333">Warning (70-90%)</text>
+            <circle cx="18" cy="69" r="5" fill="#dc3545"/>
+            <text x="30" y="73" font-size="9" fill="#333">Critical (&gt;90%)</text>
+            <line x1="12" y1="88" x2="35" y2="88" stroke="#dc3545" stroke-width="2" stroke-dasharray="4,2"/>
+            <text x="42" y="92" font-size="9" fill="#333">Blocked Flow</text>
+            <circle cx="18" cy="105" r="4" fill="#1976d2"/>
+            <text x="30" y="109" font-size="9" fill="#333">Entry Point</text>
+        </g>
 
         <!-- Section labels -->
-        <text x="20" y="75" font-size="11" fill="#666" font-weight="500">📥 Arrivals</text>
-        <text x="20" y="195" font-size="11" fill="#666" font-weight="500">🏷️ Assessment</text>
-        <text x="20" y="315" font-size="11" fill="#666" font-weight="500">🚨 Emergency Dept</text>
-        <text x="20" y="455" font-size="11" fill="#666" font-weight="500">🏨 Downstream</text>
-
-        <!-- Edges -->
-        <path d="M 150 125 C 150 162.5, 450 162.5, 450 155" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
-        <path d="M 450 125 L 450 155" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
-        <path d="M 750 125 C 750 162.5, 450 162.5, 450 155" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
-        <path d="M 450 245 L 450 275" stroke="#adb5bd" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
-        <path d="M 450 365 C 450 412.5, 150 412.5, 150 415" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
-        <path d="M 450 365 C 450 412.5, 350 412.5, 350 415" stroke="#dc3545" stroke-width="3" stroke-dasharray="8,4" fill="none" marker-end="url(#blocked-arrow)"/>
-        <path d="M 450 365 C 450 412.5, 550 412.5, 550 415" stroke="#adb5bd" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
-        <path d="M 450 365 C 450 412.5, 750 412.5, 750 415" stroke="#adb5bd" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
-
-        <!-- Entry nodes -->
-        <g transform="translate(85, 35)">
-            <rect width="130" height="90" rx="8" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#28a745"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#1565c0">Ambulance</text>
-            <text x="65" y="50" text-anchor="middle" font-size="12" fill="#333">12.0/hr</text>
-        </g>
-
-        <g transform="translate(385, 35)">
-            <rect width="130" height="90" rx="8" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#28a745"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#1565c0">Walk-in</text>
-            <text x="65" y="50" text-anchor="middle" font-size="12" fill="#333">8.0/hr</text>
-        </g>
-
-        <g transform="translate(685, 35)">
-            <rect width="130" height="90" rx="8" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#28a745"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#1565c0">HEMS</text>
-            <text x="65" y="50" text-anchor="middle" font-size="12" fill="#333">0.5/hr</text>
-        </g>
-
-        <!-- Triage -->
-        <g transform="translate(385, 155)">
-            <rect width="130" height="90" rx="8" fill="#f0fff4" stroke="#28a745" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#28a745"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#166534">Triage</text>
-            <rect x="10" y="35" width="110" height="10" rx="5" fill="#e9ecef"/>
-            <rect x="10" y="35" width="55" height="10" rx="5" fill="#28a745"/>
-            <text x="65" y="60" text-anchor="middle" font-size="12" fill="#333">1/2 (50%)</text>
-            <text x="65" y="78" text-anchor="middle" font-size="10" fill="#666">Wait: 3m</text>
-        </g>
-
-        <!-- ED Bays -->
-        <g transform="translate(385, 275)">
-            <rect width="130" height="90" rx="8" fill="#fffbf0" stroke="#ffc107" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#ffc107"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#92400e">ED Bays</text>
-            <rect x="10" y="35" width="110" height="10" rx="5" fill="#e9ecef"/>
-            <rect x="10" y="35" width="88" height="10" rx="5" fill="#ffc107"/>
-            <text x="65" y="60" text-anchor="middle" font-size="12" fill="#333">24/30 (80%)</text>
-            <text x="65" y="78" text-anchor="middle" font-size="10" fill="#666">Wait: 23m</text>
-        </g>
-
-        <!-- Downstream nodes -->
-        <g transform="translate(85, 415)">
-            <rect width="130" height="90" rx="8" fill="#f0fff4" stroke="#28a745" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#28a745"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#166534">Theatre</text>
-            <rect x="10" y="35" width="110" height="10" rx="5" fill="#e9ecef"/>
-            <rect x="10" y="35" width="55" height="10" rx="5" fill="#28a745"/>
-            <text x="65" y="60" text-anchor="middle" font-size="12" fill="#333">1/2 (50%)</text>
-            <text x="65" y="78" text-anchor="middle" font-size="10" fill="#666">Wait: 45m</text>
-        </g>
-
-        <g transform="translate(285, 415)">
-            <rect width="130" height="90" rx="8" fill="#fff5f5" stroke="#dc3545" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#dc3545"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#991b1b">ITU</text>
-            <rect x="10" y="35" width="110" height="10" rx="5" fill="#e9ecef"/>
-            <rect x="10" y="35" width="110" height="10" rx="5" fill="#dc3545"/>
-            <text x="65" y="60" text-anchor="middle" font-size="12" fill="#333">10/10 (100%)</text>
-            <text x="65" y="78" text-anchor="middle" font-size="10" fill="#666">Wait: 120m</text>
-        </g>
-
-        <g transform="translate(485, 415)">
-            <rect width="130" height="90" rx="8" fill="#fffbf0" stroke="#ffc107" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#ffc107"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#92400e">Ward</text>
-            <rect x="10" y="35" width="110" height="10" rx="5" fill="#e9ecef"/>
-            <rect x="10" y="35" width="84" height="10" rx="5" fill="#ffc107"/>
-            <text x="65" y="60" text-anchor="middle" font-size="12" fill="#333">38/50 (76%)</text>
-            <text x="65" y="78" text-anchor="middle" font-size="10" fill="#666">Wait: 35m</text>
-        </g>
-
-        <g transform="translate(685, 415)">
-            <rect width="130" height="90" rx="8" fill="#fce4ec" stroke="#c2185b" stroke-width="2"/>
-            <circle cx="115" cy="15" r="6" fill="#28a745"/>
-            <text x="65" y="22" text-anchor="middle" font-size="13" font-weight="bold" fill="#880e4f">Discharge</text>
-            <text x="65" y="50" text-anchor="middle" font-size="12" fill="#333">15.0/hr</text>
-        </g>
-
-        <!-- Legend -->
-        <g transform="translate(720, 440)">
-            <rect width="165" height="100" fill="white" stroke="#dee2e6" rx="6" fill-opacity="0.95"/>
-            <text x="10" y="20" font-size="12" font-weight="bold" fill="#333">Legend</text>
-            <circle cx="20" cy="38" r="5" fill="#28a745"/>
-            <text x="32" y="42" font-size="10" fill="#333">Normal (&lt;70%)</text>
-            <circle cx="20" cy="55" r="5" fill="#ffc107"/>
-            <text x="32" y="59" font-size="10" fill="#333">Warning (70-90%)</text>
-            <circle cx="20" cy="72" r="5" fill="#dc3545"/>
-            <text x="32" y="76" font-size="10" fill="#333">Critical (&gt;90%)</text>
-            <line x1="15" y1="88" x2="40" y2="88" stroke="#dc3545" stroke-width="2" stroke-dasharray="4,2"/>
-            <text x="48" y="92" font-size="10" fill="#333">Blocked</text>
-        </g>
+        <text x="45" y="125" font-size="9" fill="#888" font-weight="500">ARRIVALS</text>
+        <text x="202" y="185" font-size="9" fill="#888" font-weight="500">ASSESS</text>
+        <text x="382" y="180" font-size="9" fill="#888" font-weight="500">EMERGENCY</text>
+        <text x="567" y="185" font-size="9" fill="#888" font-weight="500">SURGERY</text>
+        <text x="745" y="185" font-size="9" fill="#888" font-weight="500">EXIT</text>
     </svg>
     """
 
-    st.components.v1.html(svg_content, height=560)
+    st.components.v1.html(svg_content, height=490)
 
     st.info("""
     **This is a static fallback.** Build the React component for full interactivity:
