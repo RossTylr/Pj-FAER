@@ -1,0 +1,61 @@
+# Site-specific threshold configuration example
+# Copy this file and customize for your hospital
+#
+# Usage:
+#   from faer.agents.threshold_config import load_site_config
+#   config = load_site_config(Path("config/thresholds/my_hospital.yaml"))
+#   thresholds = config.build_thresholds()
+#   agent = HeuristicShadowAgent(thresholds=thresholds)
+
+site_id: "hospital_example"
+site_name: "Example General Hospital"
+description: >
+  Example configuration demonstrating site-specific threshold customization.
+  This hospital has higher patient volumes and extended wait time tolerance.
+
+# Base thresholds to start from: "NHS" or "NONE"
+# NHS: Start with standard NHS thresholds and apply overrides
+# NONE: Start from scratch with only custom_thresholds
+base_thresholds: "NHS"
+
+# Override specific NHS thresholds
+# Keys are metric names, values are fields to override
+overrides:
+  # Higher delay tolerance for this site's patient population
+  p_delay:
+    threshold: 0.60  # 60% instead of NHS default 50%
+    soft_margin: 0.05  # 5% uncertainty buffer
+    severity_when_uncertain: "LOW"  # Downgrade when CI overlaps
+
+  # More conservative ITU threshold
+  util_itu:
+    threshold: 0.85  # 85% instead of NHS default 90%
+    soft_margin: 0.05
+
+  # Extended 4-hour wait tolerance (site-specific agreement)
+  p95_treatment_wait:
+    threshold: 300.0  # 5 hours instead of 4
+    soft_margin: 0.10  # 10% buffer
+
+# Add custom site-specific thresholds
+# These are in addition to (or replacing) NHS thresholds
+custom_thresholds:
+  # Example: Custom theatre capacity alert
+  - metric: "util_theatre"
+    threshold: 0.95
+    operator: "gt"
+    severity: "CRITICAL"
+    category: "CAPACITY"
+    title: "Theatre at Maximum Capacity"
+    message_template: >
+      Theatre utilization at {value:.0%} - all theatres fully occupied.
+      Emergency surgical cases will experience delays. Consider cancelling
+      non-urgent elective cases.
+    recommendation: >
+      Cancel non-urgent elective cases immediately. Alert on-call
+      surgical teams. Prepare for diversion of trauma cases if required.
+    soft_margin: 0.02
+    severity_when_uncertain: "HIGH"
+    uncertainty_message_template: >
+      Theatre utilization approximately {value:.0%} (near capacity).
+      Monitor closely for deterioration.

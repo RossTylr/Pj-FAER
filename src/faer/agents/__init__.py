@@ -17,6 +17,11 @@ Example usage:
     # Get insights
     for insight in result.get_all_insights():
         print(f"[{insight.severity}] {insight.title}")
+
+    # Use site-specific thresholds
+    from faer.agents import load_site_config
+    config = load_site_config(Path("config/thresholds/my_hospital.yaml"))
+    agent = HeuristicShadowAgent(thresholds=config.build_thresholds())
 """
 
 from .interface import (
@@ -31,6 +36,13 @@ from .interface import (
 )
 from .shadow import HeuristicShadowAgent, ClinicalThreshold, NHS_THRESHOLDS
 from .orchestrator import AgentOrchestrator, OrchestratorConfig, OrchestratorResult
+from .threshold_config import (
+    SiteThresholdConfig,
+    load_site_config,
+    save_site_config,
+    get_default_config_dir,
+    list_available_configs,
+)
 
 __all__ = [
     # Data models
@@ -51,4 +63,10 @@ __all__ = [
     "AgentOrchestrator",
     "OrchestratorConfig",
     "OrchestratorResult",
+    # Site Configuration
+    "SiteThresholdConfig",
+    "load_site_config",
+    "save_site_config",
+    "get_default_config_dir",
+    "list_available_configs",
 ]

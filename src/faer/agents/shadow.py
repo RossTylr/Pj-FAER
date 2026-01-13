@@ -51,6 +51,12 @@ class ClinicalThreshold:
         title: Short headline (≤80 chars)
         message_template: Format string with {value} placeholder
         recommendation: Actionable guidance
+        soft_margin: Fractional buffer zone around threshold (e.g., 0.05 = 5%)
+            where uncertainty messaging applies
+        severity_when_uncertain: Optional downgraded severity when CI overlaps
+            threshold. If None, uses original severity.
+        uncertainty_message_template: Alternative message template when
+            threshold breach is uncertain. If empty, uses message_template.
     """
 
     metric: str
@@ -61,6 +67,10 @@ class ClinicalThreshold:
     title: str
     message_template: str
     recommendation: str
+    # Uncertainty-aware fields (defaults for backward compatibility)
+    soft_margin: float = 0.0
+    severity_when_uncertain: Severity | None = None
+    uncertainty_message_template: str = ""
 
 
 # NHS/Clinical guideline thresholds
@@ -313,33 +323,51 @@ class HeuristicShadowAgent:
     def _evaluate_thresholds(
         self, metrics: MetricsSummary
     ) -> Iterator[ClinicalInsight]:
-        """Evaluate single-metric threshold rules.
+        """Evaluate single-metric threshold rules with uncertainty awareness.
 
         Iterates through configured thresholds and yields insights
-        for any breached rules.
+        for any breached rules. When confidence intervals are available,
+        the insight includes confidence level and uncertainty notes.
 
         Args:
-            metrics: Metrics to evaluate
+            metrics: Metrics to evaluate (may include ci_bounds)
 
         Yields:
-            ClinicalInsight for each triggered threshold
+            ClinicalInsight for each triggered threshold, with confidence info
         """
         for rule in self.thresholds:
             value = getattr(metrics, rule.metric, None)
             if value is None:
                 continue
 
+            # Get CI bounds if available
+            ci_bounds = metrics.ci_bounds.get(rule.metric)
+            if ci_bounds:
+                ci_lower, ci_upper = ci_bounds
+            else:
+                # No CI available - use point estimate
+                ci_lower, ci_upper = value, value
+
+            # Check if point estimate triggers threshold
             triggered = self._check_threshold(value, rule.threshold, rule.operator)
+
+            # Compute confidence and overlap
+            confidence_level = self._compute_confidence_level(
+                value, ci_lower, ci_upper, rule.threshold
+            )
+            threshold_overlap = self._ci_overlaps_threshold(
+                ci_lower, ci_upper, rule.threshold, rule.operator, rule.soft_margin
+            )
+
             if triggered:
-                yield ClinicalInsight(
-                    severity=rule.severity,
-                    category=rule.category,
-                    title=rule.title,
-                    message=rule.message_template.format(value=value),
-                    impact_metric=rule.metric,
-                    evidence={rule.metric: value, "threshold": rule.threshold},
-                    recommendation=rule.recommendation,
-                    source_agent=self.name,
+                # Threshold breached - yield insight with confidence info
+                yield self._create_insight_with_confidence(
+                    rule=rule,
+                    value=value,
+                    ci_lower=ci_lower,
+                    ci_upper=ci_upper,
+                    confidence_level=confidence_level,
+                    threshold_overlap=threshold_overlap,
                 )
 
     def _evaluate_compound_rules(
@@ -519,6 +547,142 @@ class HeuristicShadowAgent:
             "lte": lambda v, t: v <= t,
         }
         return ops.get(operator, lambda v, t: False)(value, threshold)
+
+    @staticmethod
+    def _compute_confidence_level(
+        mean: float,
+        ci_lower: float,
+        ci_upper: float,
+        threshold: float,
+    ) -> str:
+        """Compute confidence level based on CI relationship to threshold.
+
+        Args:
+            mean: Point estimate of the metric
+            ci_lower: Lower bound of confidence interval
+            ci_upper: Upper bound of confidence interval
+            threshold: Threshold value being evaluated
+
+        Returns:
+            "high", "medium", or "low" confidence level
+        """
+        # Single replication or no CI - low confidence
+        if ci_lower == ci_upper:
+            return "low"
+
+        ci_width = ci_upper - ci_lower
+        distance_to_threshold = abs(mean - threshold)
+
+        # High confidence: threshold is well outside CI (distance > 2x CI width)
+        if distance_to_threshold > 2 * ci_width:
+            return "high"
+        # Medium confidence: threshold is outside but close to CI
+        elif distance_to_threshold > ci_width:
+            return "medium"
+        # Low confidence: threshold is within or near CI
+        else:
+            return "low"
+
+    @staticmethod
+    def _ci_overlaps_threshold(
+        ci_lower: float,
+        ci_upper: float,
+        threshold: float,
+        operator: str,
+        soft_margin: float = 0.0,
+    ) -> bool:
+        """Check if confidence interval overlaps threshold boundary.
+
+        Args:
+            ci_lower: Lower bound of CI
+            ci_upper: Upper bound of CI
+            threshold: Threshold value
+            operator: Comparison operator ("gt", "lt", "gte", "lte")
+            soft_margin: Fractional buffer zone (e.g., 0.05 = 5%)
+
+        Returns:
+            True if CI spans the threshold zone, False otherwise
+        """
+        # Apply soft margin to create threshold zone
+        margin = abs(threshold) * soft_margin if threshold != 0 else soft_margin
+        threshold_low = threshold - margin
+        threshold_high = threshold + margin
+
+        # CI overlaps if it spans the threshold zone
+        return ci_lower <= threshold_high and ci_upper >= threshold_low
+
+    def _create_insight_with_confidence(
+        self,
+        rule: ClinicalThreshold,
+        value: float,
+        ci_lower: float,
+        ci_upper: float,
+        confidence_level: str,
+        threshold_overlap: bool,
+    ) -> ClinicalInsight:
+        """Create a ClinicalInsight with uncertainty-aware fields populated.
+
+        Args:
+            rule: The threshold rule that triggered
+            value: Current metric value
+            ci_lower: Lower CI bound
+            ci_upper: Upper CI bound
+            confidence_level: "high", "medium", or "low"
+            threshold_overlap: Whether CI overlaps threshold
+
+        Returns:
+            ClinicalInsight with confidence fields populated
+        """
+        # Determine severity - may be downgraded if uncertain
+        if threshold_overlap and rule.severity_when_uncertain is not None:
+            severity = rule.severity_when_uncertain
+        else:
+            severity = rule.severity
+
+        # Select message template
+        if threshold_overlap and rule.uncertainty_message_template:
+            message = rule.uncertainty_message_template.format(value=value)
+        else:
+            message = rule.message_template.format(value=value)
+
+        # Build uncertainty note
+        uncertainty_note = ""
+        if threshold_overlap:
+            uncertainty_note = (
+                f"Note: The 95% confidence interval [{ci_lower:.2f}, {ci_upper:.2f}] "
+                f"overlaps the threshold of {rule.threshold:.2f}. "
+                f"More replications may improve confidence."
+            )
+        elif confidence_level == "low":
+            uncertainty_note = (
+                "Note: Limited replications may affect reliability of this alert."
+            )
+
+        # Build title - add uncertainty marker if needed
+        title = rule.title
+        if threshold_overlap and len(title) <= 68:  # Leave room for marker
+            title = f"{title} (Uncertain)"
+
+        return ClinicalInsight(
+            severity=severity,
+            category=rule.category,
+            title=title,
+            message=message,
+            impact_metric=rule.metric,
+            evidence={
+                rule.metric: value,
+                "threshold": rule.threshold,
+                "ci_lower": ci_lower,
+                "ci_upper": ci_upper,
+            },
+            recommendation=rule.recommendation,
+            source_agent=self.name,
+            confidence_level=confidence_level,
+            ci_lower=ci_lower,
+            ci_upper=ci_upper,
+            threshold_overlap=threshold_overlap,
+            uncertainty_note=uncertainty_note,
+        )
 
     def health_check(self) -> bool:
         """Heuristic agent is always healthy (no external dependencies).

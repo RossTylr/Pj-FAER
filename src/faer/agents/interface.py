@@ -68,6 +68,11 @@ class ClinicalInsight:
         evidence: Dict of metric names to values supporting this insight
         recommendation: Optional actionable guidance
         source_agent: Name of agent that generated this insight
+        confidence_level: Statistical confidence ("high", "medium", "low")
+        ci_lower: Lower bound of metric's confidence interval
+        ci_upper: Upper bound of metric's confidence interval
+        threshold_overlap: True if CI spans the threshold boundary
+        uncertainty_note: Additional context when confidence is low
 
     Example:
         ClinicalInsight(
@@ -79,6 +84,9 @@ class ClinicalInsight:
             evidence={"p95_treatment_wait": 280.0, "threshold": 240.0},
             recommendation="Immediate capacity review required.",
             source_agent="heuristic_shadow",
+            confidence_level="high",
+            ci_lower=265.0,
+            ci_upper=295.0,
         )
     """
 
@@ -90,6 +98,12 @@ class ClinicalInsight:
     evidence: dict[str, float]
     recommendation: Optional[str] = None
     source_agent: str = ""
+    # Uncertainty-aware fields (defaults for backward compatibility)
+    confidence_level: str = "high"  # "high", "medium", "low"
+    ci_lower: Optional[float] = None
+    ci_upper: Optional[float] = None
+    threshold_overlap: bool = False
+    uncertainty_note: str = ""
 
     def __post_init__(self):
         if len(self.title) > 80:
@@ -225,6 +239,8 @@ class MetricsSummary:
         cls,
         results: dict,
         scenario_name: str = "Unnamed",
+        compute_confidence_intervals: bool = True,
+        confidence_level: float = 0.95,
     ) -> "MetricsSummary":
         """Factory method to create MetricsSummary from simulation output.
 
@@ -234,6 +250,8 @@ class MetricsSummary:
         Args:
             results: Dict with metric names as keys and lists of values
             scenario_name: Human-readable name for this scenario
+            compute_confidence_intervals: Whether to compute CIs (default True)
+            confidence_level: Confidence level for CI calculation (default 0.95)
 
         Returns:
             MetricsSummary instance with aggregated metrics
@@ -245,6 +263,33 @@ class MetricsSummary:
             if not values:
                 return default
             return sum(values) / len(values)
+
+        # Compute confidence intervals for key metrics
+        ci_bounds: dict[str, tuple[float, float]] = {}
+        if compute_confidence_intervals:
+            from faer.experiment.analysis import compute_ci
+
+            # Metrics that benefit from uncertainty quantification
+            ci_metrics = [
+                "p_delay",
+                "mean_treatment_wait",
+                "p95_treatment_wait",
+                "mean_system_time",
+                "p95_system_time",
+                "util_triage",
+                "util_ed_bays",
+                "util_itu",
+                "util_ward",
+                "util_theatre",
+                "mean_boarding_time",
+                "mean_handover_delay",
+                "mean_triage_wait",
+            ]
+            for metric_key in ci_metrics:
+                values = results.get(metric_key, [])
+                if isinstance(values, list) and len(values) >= 2:
+                    ci = compute_ci(values, confidence_level)
+                    ci_bounds[metric_key] = (ci["ci_lower"], ci["ci_upper"])
 
         return cls(
             scenario_name=scenario_name,
@@ -293,6 +338,8 @@ class MetricsSummary:
             aeromed_total=mean_of("aeromed_total", 0),
             aeromed_slots_missed=mean_of("aeromed_slots_missed", 0),
             mean_aeromed_slot_wait=mean_of("mean_aeromed_slot_wait", 0),
+            # Confidence intervals
+            ci_bounds=ci_bounds,
             # Raw
             raw_metrics=results,
         )

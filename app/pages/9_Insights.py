@@ -16,11 +16,11 @@ import streamlit as st
 # Page configuration
 st.set_page_config(
     page_title="Clinical Insights",
-    page_icon="🔍",
+    page_icon="CI",
     layout="wide",
 )
 
-st.title("🔍 Clinical Shadow Analysis")
+st.title("Clinical Shadow Analysis")
 st.caption("AI-powered analysis of simulation results")
 
 # Import agent modules
@@ -40,15 +40,15 @@ except ImportError as e:
     st.stop()
 
 
-def get_severity_icon(severity: Severity) -> str:
-    """Map severity to emoji icon."""
+def get_severity_label(severity: Severity) -> str:
+    """Map severity to text label."""
     return {
-        Severity.CRITICAL: "🔴",
-        Severity.HIGH: "🟠",
-        Severity.MEDIUM: "🟡",
-        Severity.LOW: "🟢",
-        Severity.INFO: "🔵",
-    }.get(severity, "⚪")
+        Severity.CRITICAL: "[CRITICAL]",
+        Severity.HIGH: "[HIGH]",
+        Severity.MEDIUM: "[MEDIUM]",
+        Severity.LOW: "[LOW]",
+        Severity.INFO: "[INFO]",
+    }.get(severity, "[UNKNOWN]")
 
 
 def get_severity_color(severity: Severity) -> str:
@@ -64,7 +64,7 @@ def get_severity_color(severity: Severity) -> str:
 
 # Check for simulation results
 if "run_results" not in st.session_state:
-    st.warning("⚠️ No simulation results available.")
+    st.warning("No simulation results available.")
     st.markdown("""
     **To generate insights:**
     1. Configure your scenario on the **Arrivals** and **Resources** pages
@@ -135,7 +135,7 @@ total_count = summary["total_insights"]
 
 with col1:
     st.metric(
-        "🔴 Critical",
+        "Critical",
         critical_count,
         delta=None,
         delta_color="inverse" if critical_count > 0 else "normal",
@@ -143,37 +143,37 @@ with col1:
 
 with col2:
     st.metric(
-        "🟠 High",
+        "High",
         high_count,
         delta=None,
         delta_color="inverse" if high_count > 0 else "normal",
     )
 
 with col3:
-    st.metric("🟡 Medium", medium_count)
+    st.metric("Medium", medium_count)
 
 with col4:
-    st.metric("🟢 Low", low_count)
+    st.metric("Low", low_count)
 
 with col5:
     st.metric(
-        "⏱️ Analysis Time",
+        "Analysis Time",
         f"{summary['execution_time_ms']:.0f}ms",
     )
 
 # Alert banner for critical issues
 if critical_count > 0:
     st.error(
-        f"⚠️ **{critical_count} CRITICAL issue(s) detected** - "
+        f"**{critical_count} CRITICAL issue(s) detected** - "
         "Immediate attention required!"
     )
 elif high_count > 0:
     st.warning(
-        f"⚡ **{high_count} HIGH priority issue(s) detected** - "
+        f"**{high_count} HIGH priority issue(s) detected** - "
         "Review recommended."
     )
 elif total_count == 0:
-    st.success("✅ **No significant issues detected** - System performing within thresholds.")
+    st.success("**No significant issues detected** - System performing within thresholds.")
 
 st.divider()
 
@@ -195,6 +195,17 @@ filtered_insights = [
     i for i in insights if i.severity.value in severity_filter
 ]
 
+def get_confidence_badge(confidence_level: str) -> str:
+    """Generate confidence badge with color coding."""
+    colors = {
+        "high": "green",
+        "medium": "orange",
+        "low": "red",
+    }
+    color = colors.get(confidence_level, "gray")
+    return f":{color}[{confidence_level.upper()}]"
+
+
 if not filtered_insights:
     if total_count == 0:
         st.info("No issues detected in this simulation run. The system is operating within clinical thresholds.")
@@ -203,38 +214,63 @@ if not filtered_insights:
 else:
     # Display insights
     for idx, insight in enumerate(filtered_insights):
-        icon = get_severity_icon(insight.severity)
+        label = get_severity_label(insight.severity)
+
+        # Build expander title with confidence badge
+        confidence_badge = ""
+        if hasattr(insight, "confidence_level") and insight.confidence_level:
+            confidence_badge = f" | Confidence: {get_confidence_badge(insight.confidence_level)}"
 
         # Expandable card for each insight
         with st.expander(
-            f"{icon} **{insight.severity.value}**: {insight.title}",
+            f"{label} **{insight.severity.value}**: {insight.title}{confidence_badge}",
             expanded=(insight.severity == Severity.CRITICAL),
         ):
             # Main message
             st.markdown(insight.message)
 
+            # Show uncertainty note if present
+            if hasattr(insight, "uncertainty_note") and insight.uncertainty_note:
+                st.warning(f"**Statistical Note**: {insight.uncertainty_note}")
+
+            # Show CI bounds if available
+            if hasattr(insight, "ci_lower") and insight.ci_lower is not None:
+                threshold_val = insight.evidence.get("threshold", "N/A")
+                ci_text = (
+                    f"95% CI: [{insight.ci_lower:.2f}, {insight.ci_upper:.2f}] | "
+                    f"Threshold: {threshold_val}"
+                )
+                if hasattr(insight, "threshold_overlap") and insight.threshold_overlap:
+                    ci_text += " | CI overlaps threshold"
+                st.caption(ci_text)
+
             # Evidence section
             st.caption("**Evidence**")
+            # Filter out CI bounds from evidence display (shown separately above)
             evidence_items = [
                 f"`{k}` = `{v:.2f}`" if isinstance(v, float) else f"`{k}` = `{v}`"
                 for k, v in insight.evidence.items()
+                if k not in ("ci_lower", "ci_upper")
             ]
             st.code(" | ".join(evidence_items), language=None)
 
             # Recommendation
             if insight.recommendation:
-                st.info(f"💡 **Recommendation**: {insight.recommendation}")
+                st.info(f"**Recommendation**: {insight.recommendation}")
 
             # Metadata
-            col_a, col_b = st.columns(2)
+            col_a, col_b, col_c = st.columns(3)
             with col_a:
                 st.caption(f"Category: `{insight.category.value}`")
             with col_b:
                 st.caption(f"Source: `{insight.source_agent}`")
+            with col_c:
+                if hasattr(insight, "confidence_level"):
+                    st.caption(f"Confidence: `{insight.confidence_level}`")
 
 # Expandable section for key metrics
 st.divider()
-with st.expander("📊 Key Metrics Summary", expanded=False):
+with st.expander("Key Metrics Summary", expanded=False):
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -263,7 +299,7 @@ with st.expander("📊 Key Metrics Summary", expanded=False):
 
 # Export options
 st.divider()
-with st.expander("📥 Export Options", expanded=False):
+with st.expander("Export Options", expanded=False):
     st.markdown("Export analysis results for reporting or further analysis.")
 
     col1, col2 = st.columns(2)
@@ -298,7 +334,7 @@ with st.expander("📥 Export Options", expanded=False):
         for insight in insights:
             md_lines.extend(
                 [
-                    f"### {get_severity_icon(insight.severity)} [{insight.severity.value}] {insight.title}",
+                    f"### [{insight.severity.value}] {insight.title}",
                     f"",
                     insight.message,
                     f"",
