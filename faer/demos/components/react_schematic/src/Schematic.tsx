@@ -53,22 +53,31 @@ interface SchematicProps extends ComponentProps {
 
 // === CONFIGURATION ===
 
-// Node positions (hardcoded layout for demo - hospital flow layout)
-// Centered layout that fits within 850px width
-const NODE_POSITIONS: Record<string, { x: number; y: number; row: number }> = {
-  // Entry row (y=80) - spread across top
-  ambulance: { x: 140, y: 80, row: 0 },
-  walkin: { x: 350, y: 80, row: 0 },
-  hems: { x: 560, y: 80, row: 0 },
-  // Triage row (y=200) - centered
-  triage: { x: 350, y: 200, row: 1 },
-  // ED row (y=320) - centered
-  ed_bays: { x: 350, y: 320, row: 2 },
-  // Downstream row (y=460) - spread across bottom
-  theatre: { x: 100, y: 460, row: 3 },
-  itu: { x: 270, y: 460, row: 3 },
-  ward: { x: 440, y: 460, row: 3 },
-  discharge: { x: 610, y: 460, row: 3 },
+// Node positions - Left-to-right crucifix layout
+//
+//                    [ITU]
+//                      ↑
+// [Arrivals] → [Triage] → [ED Bays] → [Theatre] → [Discharge]
+//                      ↓
+//                   [Ward]
+//
+const NODE_POSITIONS: Record<string, { x: number; y: number; col: number; lane: string }> = {
+  // Entry column (left, stacked vertically)
+  ambulance: { x: 70, y: 160, col: 0, lane: "entry" },
+  walkin: { x: 70, y: 250, col: 0, lane: "entry" },
+  hems: { x: 70, y: 340, col: 0, lane: "entry" },
+  // Triage (assessment)
+  triage: { x: 220, y: 250, col: 1, lane: "main" },
+  // ED Bays (center hub)
+  ed_bays: { x: 380, y: 250, col: 2, lane: "main" },
+  // ITU (top arm of crucifix)
+  itu: { x: 380, y: 100, col: 2, lane: "top" },
+  // Ward (bottom arm of crucifix)
+  ward: { x: 380, y: 400, col: 2, lane: "bottom" },
+  // Theatre (surgery, continues main flow)
+  theatre: { x: 540, y: 250, col: 3, lane: "main" },
+  // Discharge (exit, far right)
+  discharge: { x: 700, y: 250, col: 4, lane: "main" },
 };
 
 const STATUS_COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
@@ -77,9 +86,9 @@ const STATUS_COLORS: Record<string, { fill: string; stroke: string; text: string
   critical: { fill: "#fff5f5", stroke: "#dc3545", text: "#991b1b" },
 };
 
-const NODE_TYPE_COLORS: Record<string, { fill: string; stroke: string }> = {
-  entry: { fill: "#e3f2fd", stroke: "#1976d2" },
-  exit: { fill: "#fce4ec", stroke: "#c2185b" },
+const NODE_TYPE_COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
+  entry: { fill: "#e3f2fd", stroke: "#1976d2", text: "#1565c0" },
+  exit: { fill: "#f3e5f5", stroke: "#7b1fa2", text: "#6a1b9a" },
 };
 
 const NODE_WIDTH = 130;
@@ -108,28 +117,96 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
     if (!source || !target) return null;
 
     const strokeColor = edge.is_blocked ? "#dc3545" : "#adb5bd";
-    const strokeWidth = edge.is_blocked ? 3 : Math.max(1, Math.min(4, edge.volume_per_hour / 5));
-    const strokeDash = edge.is_blocked ? "8,4" : undefined;
+    const baseStrokeWidth = Math.max(1.5, Math.min(3, edge.volume_per_hour / 5));
+    const strokeWidth = edge.is_blocked ? baseStrokeWidth + 0.5 : baseStrokeWidth;
+    const strokeDash = edge.is_blocked ? "6,3" : undefined;
 
-    // Calculate edge start/end points based on node positions
-    let x1 = source.x;
-    let y1 = source.y + NODE_HEIGHT / 2;
-    let x2 = target.x;
-    let y2 = target.y - NODE_HEIGHT / 2;
+    let path: string;
+    let labelX: number;
+    let labelY: number;
 
-    // If same row (horizontal connection), adjust points
-    if (source.row === target.row) {
-      y1 = source.y;
-      y2 = target.y;
-      x1 = source.x + NODE_WIDTH / 2;
-      x2 = target.x - NODE_WIDTH / 2;
+    // Determine edge path based on layout
+    const isHorizontalMain = source.lane === "main" && target.lane === "main";
+    const isVerticalUp = source.lane === "main" && target.lane === "top";
+    const isVerticalDown = source.lane === "main" && target.lane === "bottom";
+    const isEntryToMain = source.lane === "entry" && target.lane === "main";
+
+    if (isHorizontalMain) {
+      // Horizontal flow on main lane
+      const x1 = source.x + NODE_WIDTH / 2;
+      const y1 = source.y;
+      const x2 = target.x - NODE_WIDTH / 2;
+      const y2 = target.y;
+      path = `M ${x1} ${y1} L ${x2} ${y2}`;
+      labelX = (x1 + x2) / 2;
+      labelY = y1 - 8;
+    } else if (isVerticalUp) {
+      // ED to ITU (up)
+      const x1 = source.x;
+      const y1 = source.y - NODE_HEIGHT / 2;
+      const x2 = target.x;
+      const y2 = target.y + NODE_HEIGHT / 2;
+      path = `M ${x1} ${y1} L ${x2} ${y2}`;
+      labelX = x1 + 12;
+      labelY = (y1 + y2) / 2;
+    } else if (isVerticalDown) {
+      // ED to Ward (down)
+      const x1 = source.x;
+      const y1 = source.y + NODE_HEIGHT / 2;
+      const x2 = target.x;
+      const y2 = target.y - NODE_HEIGHT / 2;
+      path = `M ${x1} ${y1} L ${x2} ${y2}`;
+      labelX = x1 + 12;
+      labelY = (y1 + y2) / 2;
+    } else if (isEntryToMain) {
+      // Entry nodes to triage (curved)
+      const x1 = source.x + NODE_WIDTH / 2;
+      const y1 = source.y;
+      const x2 = target.x - NODE_WIDTH / 2;
+      const y2 = target.y;
+      const midX = (x1 + x2) / 2;
+      path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+      labelX = midX;
+      labelY = (y1 + y2) / 2;
+    } else if (target.lane === "top" && source.lane !== "main") {
+      // Theatre to ITU (curved)
+      const x1 = source.x;
+      const y1 = source.y - NODE_HEIGHT / 2;
+      const x2 = target.x + NODE_WIDTH / 2;
+      const y2 = target.y;
+      path = `M ${x1} ${y1} C ${x1} ${y2 - 30}, ${x2 + 30} ${y2}, ${x2} ${y2}`;
+      labelX = (x1 + x2) / 2;
+      labelY = y2 - 20;
+    } else if (source.lane === "top" || source.lane === "bottom") {
+      // ITU/Ward to discharge (curved to the right)
+      const x1 = source.x + NODE_WIDTH / 2;
+      const y1 = source.y;
+      const x2 = target.x - NODE_WIDTH / 2;
+      const y2 = target.y;
+      const midX = (x1 + x2) / 2 + 50;
+      path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+      labelX = midX - 20;
+      labelY = (y1 + y2) / 2;
+    } else if (target.lane === "bottom" && source.lane === "top") {
+      // ITU to Ward (curved down on left side)
+      const x1 = source.x - NODE_WIDTH / 2;
+      const y1 = source.y;
+      const x2 = target.x - NODE_WIDTH / 2;
+      const y2 = target.y;
+      path = `M ${x1} ${y1} C ${x1 - 40} ${y1}, ${x2 - 40} ${y2}, ${x2} ${y2}`;
+      labelX = x1 - 30;
+      labelY = (y1 + y2) / 2;
+    } else {
+      // Default curved connection
+      const x1 = source.x + NODE_WIDTH / 2;
+      const y1 = source.y;
+      const x2 = target.x - NODE_WIDTH / 2;
+      const y2 = target.y;
+      const midX = (x1 + x2) / 2;
+      path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+      labelX = midX;
+      labelY = (y1 + y2) / 2;
     }
-
-    // Calculate control points for curved lines
-    const midY = (y1 + y2) / 2;
-    const path = source.row === target.row
-      ? `M ${x1} ${y1} L ${x2} ${y2}`
-      : `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
 
     return (
       <g key={`edge-${index}`} className="edge-group">
@@ -139,8 +216,8 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
             d={path}
             fill="none"
             stroke="#dc3545"
-            strokeWidth={strokeWidth + 4}
-            strokeOpacity={0.3}
+            strokeWidth={strokeWidth + 3}
+            strokeOpacity={0.25}
             strokeDasharray={strokeDash}
           />
         )}
@@ -155,11 +232,11 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
           className="edge-path"
         />
         {/* Volume label for significant flows */}
-        {edge.volume_per_hour >= 1.0 && (
+        {edge.volume_per_hour >= 2.0 && (
           <text
-            x={(x1 + x2) / 2 + (source.row === target.row ? 0 : 15)}
-            y={(y1 + y2) / 2}
-            fontSize={10}
+            x={labelX}
+            y={labelY}
+            fontSize={9}
             fill="#666"
             textAnchor="middle"
             className="edge-label"
@@ -179,10 +256,11 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
     // Determine colors based on node type and status
     let colors = STATUS_COLORS[node.status] || STATUS_COLORS.normal;
     if (node.node_type === "entry" || node.node_type === "exit") {
+      const typeColors = NODE_TYPE_COLORS[node.node_type];
       colors = {
-        ...colors,
-        fill: NODE_TYPE_COLORS[node.node_type].fill,
-        stroke: NODE_TYPE_COLORS[node.node_type].stroke,
+        fill: typeColors.fill,
+        stroke: typeColors.stroke,
+        text: typeColors.text,
       };
     }
 
@@ -314,30 +392,30 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
 
   // === RENDER LEGEND ===
   const renderLegend = () => (
-    <g transform="translate(20, 490)">
+    <g transform="translate(780, 70)">
       <rect
-        width={680}
-        height={50}
+        width={105}
+        height={150}
         fill="white"
         stroke="#dee2e6"
         rx={6}
         fillOpacity={0.95}
       />
-      <text x={15} y={20} fontSize={11} fontWeight="bold" fill="#333">
-        Legend:
+      <text x={10} y={18} fontSize={10} fontWeight="bold" fill="#333">
+        Legend
       </text>
-      <circle cx={80} cy={16} r={5} fill="#28a745" />
-      <text x={92} y={20} fontSize={10} fill="#333">Normal (&lt;70%)</text>
-      <circle cx={200} cy={16} r={5} fill="#ffc107" />
-      <text x={212} y={20} fontSize={10} fill="#333">Warning (70-90%)</text>
-      <circle cx={340} cy={16} r={5} fill="#dc3545" />
-      <text x={352} y={20} fontSize={10} fill="#333">Critical (&gt;90%)</text>
-      <line x1={460} y1={16} x2={490} y2={16} stroke="#dc3545" strokeWidth={2} strokeDasharray="4,2" />
-      <text x={498} y={20} fontSize={10} fill="#333">Blocked Flow</text>
-      <circle cx={600} cy={16} r={5} fill="#1976d2" />
-      <text x={612} y={20} fontSize={10} fill="#333">Entry</text>
-      <circle cx={80} cy={38} r={5} fill="#c2185b" />
-      <text x={92} y={42} fontSize={10} fill="#333">Exit</text>
+      <circle cx={18} cy={36} r={4} fill="#28a745" />
+      <text x={28} y={40} fontSize={9} fill="#333">Normal (&lt;70%)</text>
+      <circle cx={18} cy={54} r={4} fill="#ffc107" />
+      <text x={28} y={58} fontSize={9} fill="#333">Warning (70-90%)</text>
+      <circle cx={18} cy={72} r={4} fill="#dc3545" />
+      <text x={28} y={76} fontSize={9} fill="#333">Critical (&gt;90%)</text>
+      <line x1={12} y1={92} x2={32} y2={92} stroke="#dc3545" strokeWidth={2} strokeDasharray="4,2" />
+      <text x={38} y={96} fontSize={9} fill="#333">Blocked</text>
+      <circle cx={18} cy={112} r={4} fill="#1976d2" />
+      <text x={28} y={116} fontSize={9} fill="#333">Entry</text>
+      <circle cx={18} cy={130} r={4} fill="#7b1fa2" />
+      <text x={28} y={134} fontSize={9} fill="#333">Exit</text>
     </g>
   );
 
@@ -346,18 +424,18 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
     const statusColor = STATUS_COLORS[data.overall_status]?.stroke || "#666";
     return (
       <g transform="translate(20, 10)">
-        <text fontSize={18} fontWeight="bold" fill="#333">
-          🏥 System Schematic — {data.timestamp}
+        <text fontSize={16} fontWeight="bold" fill="#333">
+          System Schematic — {data.timestamp}
         </text>
-        <g transform="translate(0, 30)">
-          <text fontSize={12} fill="#666">
+        <g transform="translate(0, 22)">
+          <text fontSize={11} fill="#666">
             In System: <tspan fontWeight="bold" fill="#333">{data.total_in_system}</tspan>
           </text>
-          <text x={130} fontSize={12} fill="#666">
-            24h Throughput: <tspan fontWeight="bold" fill="#333">{data.total_throughput_24h}</tspan>
+          <text x={120} fontSize={11} fill="#666">
+            |  24hr Throughput: <tspan fontWeight="bold" fill="#333">{data.total_throughput_24h}</tspan>
           </text>
-          <text x={300} fontSize={12} fill="#666">
-            Status: <tspan fontWeight="bold" fill={statusColor}>{data.overall_status.toUpperCase()}</tspan>
+          <text x={300} fontSize={11} fill="#666">
+            |  Status: <tspan fontWeight="bold" fill={statusColor}>{data.overall_status.toUpperCase()}</tspan>
           </text>
         </g>
       </g>
@@ -412,11 +490,14 @@ const Schematic: React.FC<SchematicProps> = ({ args }) => {
       {/* Header */}
       {renderHeader()}
 
-      {/* Section labels - left aligned */}
-      <text x={25} y={55} fontSize={11} fill="#888" fontWeight="500">📥 Arrivals</text>
-      <text x={25} y={175} fontSize={11} fill="#888" fontWeight="500">🏷️ Assessment</text>
-      <text x={25} y={295} fontSize={11} fill="#888" fontWeight="500">🚨 Emergency Dept</text>
-      <text x={25} y={435} fontSize={11} fill="#888" fontWeight="500">🏨 Downstream</text>
+      {/* Section labels - positioned above each column */}
+      <text x={70} y={105} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">ARRIVALS</text>
+      <text x={220} y={195} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">ASSESS</text>
+      <text x={380} y={55} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">ITU</text>
+      <text x={380} y={195} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">EMERGENCY</text>
+      <text x={380} y={455} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">WARD</text>
+      <text x={540} y={195} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">SURGERY</text>
+      <text x={700} y={195} fontSize={9} fill="#888" fontWeight="500" textAnchor="middle">EXIT</text>
 
       {/* Edges (rendered behind nodes) */}
       <g className="edges-layer">
