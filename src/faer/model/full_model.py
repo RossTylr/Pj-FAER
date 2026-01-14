@@ -20,6 +20,7 @@ from faer.core.entities import (
     ArrivalMode, Priority, NodeType, BedState, DiagnosticType,
     TransferType, TransferDestination,
 )
+from faer.core.incident import MajorIncidentConfig, CASUALTY_PROFILES
 from faer.model.patient import Patient, Acuity, Disposition
 
 
@@ -138,6 +139,11 @@ class FullResultsCollector:
     aeromed_fixedwing_count: int = 0
     aeromed_slot_waits: List[float] = field(default_factory=list)
     aeromed_slots_missed: int = 0
+
+    # Phase 11: Major Incident tracking
+    incident_arrivals_total: int = 0
+    incident_arrivals_by_profile: Dict[str, int] = field(default_factory=dict)
+    incident_decon_waits: List[float] = field(default_factory=list)
 
     def __post_init__(self):
         for resource in ["triage", "ed_bays", "handover", "surgery", "itu", "ward",
@@ -263,6 +269,25 @@ class FullResultsCollector:
     def record_missed_aeromed_slot(self, patient: Patient, time: float) -> None:
         """Record a missed aeromed slot (Phase 10)."""
         self.aeromed_slots_missed += 1
+
+    def record_incident_arrival(self, profile: str) -> None:
+        """Record an incident casualty arrival (Phase 11).
+
+        Args:
+            profile: The casualty profile value (e.g., "rta", "cbrn").
+        """
+        self.incident_arrivals_total += 1
+        self.incident_arrivals_by_profile[profile] = (
+            self.incident_arrivals_by_profile.get(profile, 0) + 1
+        )
+
+    def record_decon_wait(self, wait_time: float) -> None:
+        """Record CBRN decontamination wait time (Phase 11).
+
+        Args:
+            wait_time: Time spent in decontamination in minutes.
+        """
+        self.incident_decon_waits.append(wait_time)
 
     def compute_metrics(self, run_length: float, scenario: FullScenario) -> Dict:
         """Compute all KPIs from collected data.
@@ -635,6 +660,63 @@ class FullResultsCollector:
             metrics["ward_bed_days_blocked_aeromed"] = sum(self.aeromed_slot_waits) / 1440
         else:
             metrics["ward_bed_days_blocked_aeromed"] = 0.0
+
+        # Phase 11: Major Incident metrics
+        metrics["incident_arrivals_total"] = self.incident_arrivals_total
+        metrics["incident_arrivals_by_profile"] = dict(self.incident_arrivals_by_profile)
+
+        # Incident-specific patient metrics (filtered from valid_patients)
+        incident_patients = [p for p in valid_patients if p.is_incident_casualty]
+        metrics["incident_patients_count"] = len(incident_patients)
+
+        if incident_patients:
+            # Wait times for incident casualties
+            incident_waits = [p.treatment_wait for p in incident_patients if p.treatment_wait > 0]
+            if incident_waits:
+                metrics["incident_mean_wait"] = float(np.mean(incident_waits))
+                metrics["incident_p95_wait"] = float(np.percentile(incident_waits, 95))
+                metrics["incident_max_wait"] = float(np.max(incident_waits))
+            else:
+                metrics["incident_mean_wait"] = 0.0
+                metrics["incident_p95_wait"] = 0.0
+                metrics["incident_max_wait"] = 0.0
+
+            # System times for incident casualties
+            incident_system_times = [p.system_time for p in incident_patients if p.departure_time is not None]
+            if incident_system_times:
+                metrics["incident_mean_system_time"] = float(np.mean(incident_system_times))
+                metrics["incident_p95_system_time"] = float(np.percentile(incident_system_times, 95))
+            else:
+                metrics["incident_mean_system_time"] = 0.0
+                metrics["incident_p95_system_time"] = 0.0
+
+            # Admission rate for incident casualties
+            incident_admitted = sum(1 for p in incident_patients if p.is_admitted)
+            metrics["incident_admission_rate"] = incident_admitted / len(incident_patients)
+
+            # Priority breakdown for incident casualties
+            for priority in Priority:
+                p_patients = [p for p in incident_patients if p.priority == priority]
+                metrics[f"incident_{priority.name}_count"] = len(p_patients)
+        else:
+            metrics["incident_mean_wait"] = 0.0
+            metrics["incident_p95_wait"] = 0.0
+            metrics["incident_max_wait"] = 0.0
+            metrics["incident_mean_system_time"] = 0.0
+            metrics["incident_p95_system_time"] = 0.0
+            metrics["incident_admission_rate"] = 0.0
+            for priority in Priority:
+                metrics[f"incident_{priority.name}_count"] = 0
+
+        # Decontamination metrics (CBRN incidents)
+        if self.incident_decon_waits:
+            metrics["incident_decon_count"] = len(self.incident_decon_waits)
+            metrics["incident_mean_decon_time"] = float(np.mean(self.incident_decon_waits))
+            metrics["incident_max_decon_time"] = float(np.max(self.incident_decon_waits))
+        else:
+            metrics["incident_decon_count"] = 0
+            metrics["incident_mean_decon_time"] = 0.0
+            metrics["incident_max_decon_time"] = 0.0
 
         return metrics
 
@@ -2220,6 +2302,88 @@ def arrival_generator_multistream(
             env.process(patient_journey(env, patient, resources, scenario, results))
 
 
+# ============== Phase 11: Major Incident Arrival Generator ==============
+
+def incident_arrival_generator(
+    env: simpy.Environment,
+    resources: AEResources,
+    incident_times: List[float],
+    scenario: FullScenario,
+    results: 'FullResultsCollector',
+    patient_counter: itertools.count,
+) -> Generator[simpy.Event, None, None]:
+    """Generate incident casualty arrivals at pre-scheduled times.
+
+    Phase 11: Incident arrivals are pre-calculated at simulation start for
+    reproducibility. This generator yields until each scheduled arrival time,
+    then creates and processes the incident casualty.
+
+    Args:
+        env: SimPy environment.
+        resources: Hospital resources.
+        incident_times: Pre-calculated absolute arrival times (sorted).
+        scenario: Full scenario configuration.
+        results: Results collector.
+        patient_counter: Shared counter for unique patient IDs.
+
+    Yields:
+        SimPy events for timeouts between arrivals.
+    """
+    config = scenario.major_incident_config
+    if not config:
+        return
+
+    rng = scenario.rng_incident
+    profile_data = CASUALTY_PROFILES[config.casualty_profile]
+
+    for arrival_time in incident_times:
+        # Wait until scheduled arrival time
+        if env.now < arrival_time:
+            yield env.timeout(arrival_time - env.now)
+
+        # Sample priority from incident profile's casualty mix
+        priority = config.sample_priority(rng)
+
+        # Map priority to acuity (same logic as normal arrivals)
+        if priority == Priority.P1_IMMEDIATE:
+            acuity = Acuity.RESUS
+        elif priority in (Priority.P2_VERY_URGENT, Priority.P3_URGENT):
+            acuity = Acuity.MAJORS if rng.random() < 0.6 else Acuity.MINORS
+        else:
+            acuity = Acuity.MINORS
+
+        # Create incident casualty patient
+        patient = Patient(
+            id=next(patient_counter),
+            arrival_time=env.now,
+            acuity=acuity,
+            priority=priority,
+            mode=ArrivalMode.AMBULANCE,  # Incident casualties arrive by ambulance
+        )
+
+        # Mark as incident casualty with profile info
+        patient.mark_as_incident_casualty(
+            incident_profile=config.casualty_profile.value,
+            requires_decon=profile_data["requires_decon"],
+        )
+
+        # Handle CBRN decontamination delay
+        if patient.requires_decon:
+            decon_start = env.now
+            decon_duration = config.sample_decon_time(rng)
+            yield env.timeout(decon_duration)
+            patient.record_decontamination(decon_start, env.now)
+            results.record_decon_wait(decon_duration)
+
+        # Record arrival and start patient journey
+        results.record_arrival(patient)
+        results.record_incident_arrival(config.casualty_profile.value)
+
+        # Incident casualties go directly to patient journey (no vehicle turnaround)
+        # They are assumed to have been delivered and vehicle departed
+        env.process(patient_journey(env, patient, resources, scenario, results))
+
+
 def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -> Dict[str, Any]:
     """Execute full A&E simulation.
 
@@ -2314,6 +2478,25 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
         env.process(arrival_generator_single(
             env, resources, scenario, results, patient_counter
         ))
+
+    # Phase 11: Start incident arrival generator if configured
+    if (scenario.major_incident_config and
+        scenario.major_incident_config.enabled):
+        # Pre-generate incident arrival times for reproducibility
+        # Use average rate across configured arrival profiles for baseline
+        total_hourly_rate = sum(
+            sum(cfg.hourly_rates) / 24 for cfg in scenario.arrival_configs
+        ) if scenario.arrival_configs else scenario.arrival_rate
+
+        incident_times = scenario.major_incident_config.generate_arrival_times(
+            scenario.rng_incident,
+            total_hourly_rate,
+        )
+
+        if incident_times:
+            env.process(incident_arrival_generator(
+                env, resources, incident_times, scenario, results, patient_counter
+            ))
 
     # Run simulation
     total_time = scenario.warm_up + scenario.run_length

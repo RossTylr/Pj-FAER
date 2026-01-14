@@ -11,6 +11,7 @@ from faer.core.entities import (
     NodeType, Priority, ArrivalMode, ArrivalModel, DayType,
     DiagnosticType, TransferType,
 )
+from faer.core.incident import MajorIncidentConfig
 
 
 # ============== Phase 8: Run Length Presets ==============
@@ -740,6 +741,9 @@ class FullScenario:
     # Phase 10: Aeromedical evacuation configuration
     aeromed_config: Optional[AeromedConfig] = None
 
+    # Phase 11: Major Incident configuration
+    major_incident_config: Optional[MajorIncidentConfig] = None
+
     # RNG for diagnostics (Phase 7) - created in __post_init__
     rng_diagnostics: Optional[np.random.Generator] = None
     rng_transfer: Optional[np.random.Generator] = None
@@ -747,6 +751,7 @@ class FullScenario:
     rng_ward: Optional[np.random.Generator] = None  # Phase 8
     rng_theatre: Optional[np.random.Generator] = None  # Phase 8
     rng_aeromed: Optional[np.random.Generator] = None  # Phase 10
+    rng_incident: Optional[np.random.Generator] = None  # Phase 11
 
     def __post_init__(self) -> None:
         """Initialize separate RNG streams and validate parameters."""
@@ -773,6 +778,7 @@ class FullScenario:
         self.rng_ward = np.random.default_rng(self.random_seed + 20)  # Phase 8
         self.rng_theatre = np.random.default_rng(self.random_seed + 21)  # Phase 8
         self.rng_aeromed = np.random.default_rng(self.random_seed + 22)  # Phase 10
+        self.rng_incident = np.random.default_rng(self.random_seed + 23)  # Phase 11
 
         # Initialize default Phase 8 configs if not provided
         if self.itu_config is None:
@@ -1114,4 +1120,6 @@ class FullScenario:
             release_stable_to_wait=self.release_stable_to_wait,
             # Phase 10: Copy aeromed config
             aeromed_config=self.aeromed_config,
+            # Phase 11: Copy major incident config
+            major_incident_config=self.major_incident_config,
         )

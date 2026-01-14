@@ -29,6 +29,12 @@ from faer.core.scenario import (
     WardConfig,
     TheatreConfig,
 )
+from faer.core.incident import (
+    MajorIncidentConfig,
+    CasualtyProfile,
+    IncidentArrivalPattern,
+    CASUALTY_PROFILES,
+)
 
 st.set_page_config(
     page_title="Resources",
@@ -104,6 +110,17 @@ def init_resource_defaults():
         'ward_los_hours_mean': 72.0,  # 3 days
         'ward_los_cv': 1.0,
         'ward_turnaround_mins': 30.0,
+
+        # Major Incident (Phase 11)
+        'incident_enabled': False,
+        'incident_trigger_time': 120.0,
+        'incident_duration': 120.0,
+        'incident_overload_pct': 50.0,
+        'incident_pattern': 'BOLUS',
+        'incident_profile': 'GENERIC',
+        'incident_wave_count': 3,
+        'incident_decon_min': 15.0,
+        'incident_decon_max': 45.0,
     }
 
     for key, value in defaults.items():
@@ -645,6 +662,198 @@ with st.container(border=True):
     st.caption(f"Ward LoS: ~{ward_los:.0f}h ({ward_los/24:.1f} days)")
 
 # ============================================================
+# SECTION 7: MAJOR INCIDENT MODE (Phase 11)
+# ============================================================
+st.header("7. Major Incident Mode")
+
+with st.container(border=True):
+    st.markdown("""
+    **OVERLAY SYSTEM**: Major incidents inject surge casualties on top of normal arrivals.
+    Configure when the incident triggers, how many extra casualties, and the casualty profile.
+
+    **Simulation**: Pre-generates incident arrival times at simulation start -> `incident_arrival_generator()`
+    """)
+
+    # Enable toggle
+    incident_enabled = st.checkbox(
+        "Enable Major Incident Overlay",
+        value=st.session_state.incident_enabled,
+        key="input_incident_enabled",
+        help="When enabled, incident casualties will be injected at the configured time"
+    )
+    st.session_state.incident_enabled = incident_enabled
+
+    if incident_enabled:
+        st.info("Incident mode is **ACTIVE**. Configure the incident parameters below.")
+
+        # Timing and intensity
+        st.subheader("Timing & Intensity")
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            trigger_time = st.number_input(
+                "Trigger Time (mins)",
+                min_value=0.0,
+                max_value=1440.0,
+                value=float(st.session_state.incident_trigger_time),
+                step=30.0,
+                key="input_incident_trigger",
+                help="Minutes into simulation when incident starts"
+            )
+            st.session_state.incident_trigger_time = trigger_time
+            st.caption(f"= {trigger_time/60:.1f} hours into simulation")
+
+        with col2:
+            duration = st.number_input(
+                "Duration (mins)",
+                min_value=15.0,
+                max_value=480.0,
+                value=float(st.session_state.incident_duration),
+                step=15.0,
+                key="input_incident_duration",
+                help="How long the incident arrival window lasts"
+            )
+            st.session_state.incident_duration = duration
+            st.caption(f"= {duration/60:.1f} hours of arrivals")
+
+        with col3:
+            overload = st.slider(
+                "Overload (%)",
+                min_value=10,
+                max_value=300,
+                value=int(st.session_state.incident_overload_pct),
+                step=10,
+                key="input_incident_overload",
+                help="Extra casualties as % of normal rate in window"
+            )
+            st.session_state.incident_overload_pct = float(overload)
+
+            # Calculate expected casualties
+            # Rough estimate based on 5/hr normal rate
+            estimated = (5.0 * duration / 60) * (overload / 100)
+            st.caption(f"~{estimated:.0f} extra casualties")
+
+        # Arrival pattern
+        st.subheader("Arrival Pattern")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            pattern_options = {
+                'BOLUS': 'Bolus (front-loaded)',
+                'WAVES': 'Waves (multiple peaks)',
+                'SUSTAINED': 'Sustained (uniform)'
+            }
+            pattern = st.selectbox(
+                "Pattern",
+                options=list(pattern_options.keys()),
+                format_func=lambda x: pattern_options[x],
+                index=list(pattern_options.keys()).index(st.session_state.incident_pattern),
+                key="input_incident_pattern",
+                help="How casualties arrive over the incident window"
+            )
+            st.session_state.incident_pattern = pattern
+
+            # Pattern descriptions
+            if pattern == 'BOLUS':
+                st.caption("60% in first 20%, models initial surge from scene")
+            elif pattern == 'WAVES':
+                st.caption("Multiple peaks at regular intervals")
+            else:
+                st.caption("Uniform distribution, prolonged incident")
+
+        with col2:
+            if pattern == 'WAVES':
+                wave_count = st.number_input(
+                    "Number of Waves",
+                    min_value=2,
+                    max_value=10,
+                    value=st.session_state.incident_wave_count,
+                    key="input_incident_waves",
+                    help="Number of arrival peaks"
+                )
+                st.session_state.incident_wave_count = wave_count
+            else:
+                st.write("")  # Placeholder
+
+        # Casualty profile
+        st.subheader("Casualty Profile")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            profile_options = {
+                'GENERIC': 'Generic MCI',
+                'BLAST': 'Blast / Explosion',
+                'RTA': 'Road Traffic Accident',
+                'CBRN': 'CBRN (requires decon)',
+                'BURNS': 'Burns',
+                'COMBAT': 'Combat / Penetrating'
+            }
+            profile = st.selectbox(
+                "Profile",
+                options=list(profile_options.keys()),
+                format_func=lambda x: profile_options[x],
+                index=list(profile_options.keys()).index(st.session_state.incident_profile),
+                key="input_incident_profile",
+                help="Type of incident determining casualty severity mix"
+            )
+            st.session_state.incident_profile = profile
+
+            # Show profile description
+            profile_enum = CasualtyProfile[profile]
+            profile_data = CASUALTY_PROFILES[profile_enum]
+            st.caption(profile_data['description'])
+
+        with col2:
+            # Show priority breakdown
+            st.markdown("**Priority Mix**")
+            priority_mix = profile_data['priority_mix']
+            mix_df = pd.DataFrame({
+                'Priority': [p.name.replace('_', ' ') for p in priority_mix.keys()],
+                'Percentage': [f"{v*100:.0f}%" for v in priority_mix.values()]
+            })
+            st.dataframe(mix_df, hide_index=True, use_container_width=True)
+
+        # CBRN decontamination settings
+        if profile == 'CBRN':
+            st.subheader("Decontamination Settings")
+            st.warning("CBRN casualties require decontamination before entering ED")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                decon_min = st.number_input(
+                    "Min Decon Time (mins)",
+                    min_value=5.0,
+                    max_value=60.0,
+                    value=float(st.session_state.incident_decon_min),
+                    step=5.0,
+                    key="input_decon_min"
+                )
+                st.session_state.incident_decon_min = decon_min
+
+            with col2:
+                decon_max = st.number_input(
+                    "Max Decon Time (mins)",
+                    min_value=10.0,
+                    max_value=120.0,
+                    value=float(st.session_state.incident_decon_max),
+                    step=5.0,
+                    key="input_decon_max"
+                )
+                st.session_state.incident_decon_max = decon_max
+
+            if decon_max < decon_min:
+                st.error("Max decon time must be >= min decon time")
+
+        # Typical scenarios
+        with st.expander("Typical Scenarios for this Profile"):
+            scenarios = profile_data.get('typical_scenarios', [])
+            for scenario in scenarios:
+                st.write(f"- {scenario}")
+
+    else:
+        st.caption("Enable to configure major incident parameters")
+
+# ============================================================
 # DISTRIBUTION PREVIEW (Optional)
 # ============================================================
 st.markdown("---")
@@ -783,7 +992,7 @@ with st.expander("Distribution Preview - Visualize Length of Stay Variability", 
         """)
 
 # ============================================================
-# SECTION 7: RESOURCE SUMMARY
+# SECTION 8: RESOURCE SUMMARY
 # ============================================================
 st.markdown("---")
 st.header("Resource Summary")
@@ -841,6 +1050,20 @@ with st.container(border=True):
     # Total bed count
     total_beds = st.session_state.n_ed_bays + st.session_state.n_itu_beds + st.session_state.n_ward_beds
     st.metric("Total Bed Capacity", total_beds, help="ED + ITU + Ward")
+
+    # Major Incident summary if enabled
+    if st.session_state.incident_enabled:
+        st.markdown("---")
+        st.subheader("Major Incident Configuration")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Trigger", f"{st.session_state.incident_trigger_time:.0f} mins")
+        with col2:
+            st.metric("Duration", f"{st.session_state.incident_duration:.0f} mins")
+        with col3:
+            estimated_casualties = (5.0 * st.session_state.incident_duration / 60) * (st.session_state.incident_overload_pct / 100)
+            st.metric("Est. Casualties", f"~{estimated_casualties:.0f}")
+        st.caption(f"Profile: {st.session_state.incident_profile} | Pattern: {st.session_state.incident_pattern}")
 
 # ============================================================
 # CAPACITY RATIOS & VALIDATION
@@ -942,6 +1165,34 @@ def build_diagnostic_configs() -> Dict[DiagnosticType, DiagnosticConfig]:
 
 # Store the helper function in session state for use by Run page
 st.session_state.build_diagnostic_configs = build_diagnostic_configs
+
+
+# ============================================================
+# BUILD MAJOR INCIDENT CONFIG HELPER (Phase 11)
+# ============================================================
+def build_incident_config() -> MajorIncidentConfig:
+    """Build MajorIncidentConfig from session state for FullScenario."""
+    if not st.session_state.get('incident_enabled', False):
+        return MajorIncidentConfig(enabled=False)
+
+    return MajorIncidentConfig(
+        enabled=True,
+        trigger_time=st.session_state.incident_trigger_time,
+        duration=st.session_state.incident_duration,
+        overload_percentage=st.session_state.incident_overload_pct,
+        arrival_pattern=IncidentArrivalPattern[st.session_state.incident_pattern],
+        casualty_profile=CasualtyProfile[st.session_state.incident_profile],
+        wave_count=st.session_state.incident_wave_count,
+        decon_time_range=(
+            st.session_state.incident_decon_min,
+            st.session_state.incident_decon_max
+        ),
+    )
+
+
+# Store in session state for Run page
+st.session_state.build_incident_config = build_incident_config
+
 
 # ============================================================
 # NAVIGATION

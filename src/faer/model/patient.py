@@ -109,6 +109,13 @@ class Patient:
     aeromed_slot_missed: bool = False
     aeromed_departure: Optional[float] = None
 
+    # Phase 11: Major Incident
+    is_incident_casualty: bool = False
+    incident_profile: Optional[str] = None  # CasualtyProfile value (e.g., "rta", "cbrn")
+    requires_decon: bool = False  # CBRN casualties need decontamination
+    decon_start: Optional[float] = None
+    decon_end: Optional[float] = None
+
     @property
     def handover_delay(self) -> float:
         """Time waiting for handover bay (Phase 5b)."""
@@ -391,3 +398,38 @@ class Patient:
         self.aeromed_departure = departure
         self.aeromed_slot_missed = slot_missed
         self.resources_used.append(f"aeromed_{aeromed_type.lower()}")
+
+    # Phase 11: Major Incident properties and methods
+
+    @property
+    def decon_duration(self) -> float:
+        """Time for decontamination (Phase 11, CBRN only)."""
+        if self.decon_start is not None and self.decon_end is not None:
+            return self.decon_end - self.decon_start
+        return 0.0
+
+    def record_decontamination(self, start: float, end: float) -> None:
+        """Record decontamination timestamps (Phase 11, CBRN).
+
+        Args:
+            start: Time when decontamination began.
+            end: Time when decontamination completed.
+        """
+        self.decon_start = start
+        self.decon_end = end
+        self.resources_used.append("decon")
+
+    def mark_as_incident_casualty(
+        self,
+        incident_profile: str,
+        requires_decon: bool = False,
+    ) -> None:
+        """Mark patient as casualty from major incident (Phase 11).
+
+        Args:
+            incident_profile: The casualty profile value (e.g., "rta", "cbrn").
+            requires_decon: Whether CBRN decontamination is needed.
+        """
+        self.is_incident_casualty = True
+        self.incident_profile = incident_profile
+        self.requires_decon = requires_decon
