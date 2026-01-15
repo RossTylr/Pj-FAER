@@ -93,6 +93,11 @@ def render_fallback_schematic(data: SchematicData):
         }
         return colors.get(status, ("#f8f9fa", "#6c757d"))
 
+    # Helper to safely get throughput from optional nodes
+    def get_throughput(node_id: str) -> float:
+        node = data.nodes.get(node_id)
+        return node.throughput_per_hour if node else 0.0
+
     ed = data.nodes.get("ed_bays")
     itu = data.nodes.get("itu")
     ward = data.nodes.get("ward")
@@ -151,21 +156,21 @@ def render_fallback_schematic(data: SchematicData):
             <rect width="100" height="50" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
             <circle cx="88" cy="12" r="5" fill="#28a745"/>
             <text x="50" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="#1565c0">Ambulance</text>
-            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">{data.nodes.get('ambulance', type('', (), {{'throughput_per_hour': 0}})()).throughput_per_hour:.1f}/hr</text>
+            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">{get_throughput('ambulance'):.1f}/hr</text>
         </g>
 
         <g transform="translate(20, 210)">
             <rect width="100" height="50" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
             <circle cx="88" cy="12" r="5" fill="#28a745"/>
             <text x="50" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="#1565c0">Walk-in</text>
-            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">{data.nodes.get('walkin', type('', (), {{'throughput_per_hour': 0}})()).throughput_per_hour:.1f}/hr</text>
+            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">{get_throughput('walkin'):.1f}/hr</text>
         </g>
 
         <g transform="translate(20, 285)">
             <rect width="100" height="50" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
             <circle cx="88" cy="12" r="5" fill="#28a745"/>
             <text x="50" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="#1565c0">HEMS</text>
-            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">{data.nodes.get('hems', type('', (), {{'throughput_per_hour': 0}})()).throughput_per_hour:.1f}/hr</text>
+            <text x="50" y="36" text-anchor="middle" font-size="10" fill="#333">{get_throughput('hems'):.1f}/hr</text>
         </g>
 
         <!-- === TRIAGE === -->
@@ -228,7 +233,7 @@ def render_fallback_schematic(data: SchematicData):
             <rect width="100" height="80" rx="6" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2"/>
             <circle cx="88" cy="12" r="5" fill="#28a745"/>
             <text x="50" y="18" text-anchor="middle" font-size="12" font-weight="bold" fill="#6a1b9a">Discharge</text>
-            <text x="50" y="45" text-anchor="middle" font-size="14" font-weight="bold" fill="#333">{data.nodes.get('discharge', type('', (), {{'throughput_per_hour': 0}})()).throughput_per_hour:.1f}/hr</text>
+            <text x="50" y="45" text-anchor="middle" font-size="14" font-weight="bold" fill="#333">{get_throughput('discharge'):.1f}/hr</text>
             <text x="50" y="65" text-anchor="middle" font-size="9" fill="#666">Exit</text>
         </g>
 
