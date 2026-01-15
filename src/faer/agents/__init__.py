@@ -33,6 +33,11 @@ from .interface import (
     ClinicalAgent,
     AgentResult,
     AgentExecutionError,
+    # System evaluation models
+    StructuralAssessment,
+    PeakLoadAnalysis,
+    ExpertPerspective,
+    SystemEvaluation,
 )
 from .shadow import HeuristicShadowAgent, ClinicalThreshold, NHS_THRESHOLDS
 from .orchestrator import AgentOrchestrator, OrchestratorConfig, OrchestratorResult
@@ -51,6 +56,11 @@ __all__ = [
     "ClinicalInsight",
     "CapacityRecommendation",
     "MetricsSummary",
+    # System evaluation models
+    "StructuralAssessment",
+    "PeakLoadAnalysis",
+    "ExpertPerspective",
+    "SystemEvaluation",
     # Protocols
     "ClinicalAgent",
     "AgentResult",

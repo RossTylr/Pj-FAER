@@ -16,6 +16,17 @@ FAER simulates A&E → Resus → disposition pathways over 1-36 hour horizons, h
 - Which capacity investments have system-wide effects
 - What fails first under surge conditions
 
+## Features
+
+- **Full A&E Pathway**: Triage → ED Bays → Theatre/ITU/Ward → Discharge
+- **Priority Queuing**: P1-P4 triage levels with clinical priority handling
+- **Multi-Stream Arrivals**: Ambulance, helicopter (HEMS), and walk-in patients
+- **Diagnostics**: CT scanner, X-ray, and Bloods with realistic ED bay blocking
+- **Aeromedical Evacuation**: HEMS and fixed-wing transfers to specialist centres
+- **Interactive Schematic**: Real-time React/SVG visualisation of patient flow
+- **Clinical Insights**: Heuristic-based agent that detects risk patterns (NHS thresholds)
+- **Scenario Comparison**: Run multiple configurations and compare outcomes
+
 ## Installation
 
 ```bash
@@ -43,46 +54,48 @@ pytest tests/ --cov=faer --cov-report=html
 ## Project Structure
 
 ```
-pj_faer/
-├── src/faer/           # Core simulation library
-│   ├── core/           # Scenario config, arrivals, distributions
-│   ├── model/          # SimPy patient processes
-│   ├── results/        # Event logging and metrics
-│   └── experiment/     # Replication runner, CI analysis
-├── app/                # Streamlit web UI
-├── tests/              # Pytest test suite
-└── data/               # Arrival profiles
+Pj-FAER/
+├── src/faer/              # Core simulation library
+│   ├── core/              # Scenario config, arrivals, distributions
+│   ├── model/             # SimPy patient processes
+│   ├── results/           # Event logging and metrics
+│   ├── experiment/        # Replication runner, CI analysis
+│   └── agents/            # Clinical shadow agents for insights
+├── app/                   # Streamlit web UI
+│   ├── pages/             # App pages (Arrivals, Resources, Run, Results, etc.)
+│   └── components/        # React schematic component
+├── tests/                 # Pytest test suite
+├── docs/                  # Documentation and PRDs
+└── config/                # Configuration files
 ```
 
-## Current Phase
+## App Pages
 
-**Phase 7: Diagnostics & Transfers** - Complete hospital flow with diagnostics and inter-facility transfers.
-
-### Phase 7 Features
-- **Diagnostic Nodes (CT, X-ray, Bloods)**: Patients queue for scans/tests with configurable capacity and turnaround times
-- **Diagnostics Loop**: Patients keep their ED bay while going for diagnostics (realistic blocking behaviour)
-- **Inter-Facility Transfers**: Land ambulance and helicopter transfers to specialist centres (Major Trauma, Neurosurgery, Cardiac, Burns, PICU)
-- **Arrival Models UI**: Three configuration modes - Simple (demand slider), 24-Hour Profile (day type patterns), and Detailed (hourly breakdown by mode)
-
-### Previous Phases
-- **Phase 4-6**: Priority queuing (P1-P4), multi-stream arrivals, handover gate, fleet resources, downstream nodes (Surgery/ITU/Ward), experimentation framework
-
-### Recent Changes (January 2026)
-- Added CT scanner, X-ray, and Bloods diagnostic resources with priority-based probability
-- Implemented diagnostic loop where patients hold ED bay during scans
-- Added inter-facility transfer pathway with land ambulance and helicopter options
-- Updated Streamlit UI with arrival model selector (Simple/24-Hour Profile/Detailed modes)
-- Added diagnostic and transfer metrics tracking
-
-See [CLAUDE.md](CLAUDE.md) for development instructions and phase progression.
+| Page | Description |
+|------|-------------|
+| **Arrivals** | Configure arrival rates (simple, 24-hour profile, or detailed) |
+| **Resources** | Set capacity for ED bays, theatre, ITU, ward, diagnostics |
+| **Schematic** | Interactive patient flow diagram |
+| **Aeromed** | Configure aeromedical evacuation settings |
+| **Run** | Execute simulation with progress tracking |
+| **Results** | KPIs, utilisation metrics, and flow schematic |
+| **Compare** | Side-by-side scenario comparison |
+| **Sensitivity** | Parameter sensitivity analysis |
+| **Insights** | Clinical shadow agent risk detection |
 
 ## Tech Stack
 
 - **SimPy 4.1+** - Discrete-event simulation engine
 - **sim-tools** - Tom Monks' DES utilities
 - **Streamlit 1.30+** - Web UI
+- **React/TypeScript** - Interactive schematic component
 - **NumPy, Pandas, SciPy** - Numerical computing
 - **Plotly** - Visualisation
+
+## Documentation
+
+- [CLAUDE.md](CLAUDE.md) - Development instructions and coding standards
+- [docs/PRD_AGENT_INTEGRATION.md](docs/PRD_AGENT_INTEGRATION.md) - Clinical agent integration specification
 
 ## Attribution
 

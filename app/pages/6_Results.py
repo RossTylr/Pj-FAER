@@ -89,76 +89,99 @@ def get_util(key: str, default: float = 0.0):
         return results[key]
     return [default] * n_reps
 
-# --- Emergency Services ---
-st.subheader("Emergency Services")
-es_cols = st.columns(3)
+# Toggle between schematic and detailed view
+view_mode = st.radio(
+    "View mode",
+    ["Schematic", "Detailed"],
+    horizontal=True,
+    help="Toggle between visual schematic and detailed metrics view"
+)
 
-with es_cols[0]:
-    ci = compute_ci(get_util("util_ambulance_fleet"))
-    st.metric("Ambulance Fleet", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+if view_mode == "Schematic":
+    # Render the utilisation schematic (matches crucifix layout from patient flow schematic)
+    from app.components.react_schematic.data import (
+        build_utilisation_schematic,
+        render_utilisation_schematic_svg,
+    )
 
-with es_cols[1]:
-    ci = compute_ci(get_util("util_helicopter_fleet"))
-    st.metric("HEMS Fleet", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    # Get run length in hours for throughput calculation
+    run_length_hours = scenario.run_length / 60 if scenario else 8.0
 
-with es_cols[2]:
-    ci = compute_ci(get_util("util_handover"))
-    st.metric("Handover Bays", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    util_data = build_utilisation_schematic(results, compute_ci, run_length_hours)
+    svg_content = render_utilisation_schematic_svg(util_data)
+    st.components.v1.html(svg_content, height=650)
 
-# --- Triage & ED ---
-st.subheader("Triage & ED")
-ed_cols = st.columns(2)
+else:
+    # --- Emergency Services ---
+    st.subheader("Emergency Services")
+    es_cols = st.columns(3)
 
-with ed_cols[0]:
-    ci = compute_ci(get_util("util_triage"))
-    st.metric("Triage", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    with es_cols[0]:
+        ci = compute_ci(get_util("util_ambulance_fleet"))
+        st.metric("Ambulance Fleet", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-with ed_cols[1]:
-    ci = compute_ci(get_util("util_ed_bays"))
-    st.metric("ED Bays", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    with es_cols[1]:
+        ci = compute_ci(get_util("util_helicopter_fleet"))
+        st.metric("HEMS Fleet", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-# --- Diagnostics ---
-st.subheader("Diagnostics")
-diag_cols = st.columns(3)
+    with es_cols[2]:
+        ci = compute_ci(get_util("util_handover"))
+        st.metric("Handover Bays", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-with diag_cols[0]:
-    ci = compute_ci(get_util("util_CT_SCAN"))
-    st.metric("CT Scanner", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    # --- Triage & ED ---
+    st.subheader("Triage & ED")
+    ed_cols = st.columns(2)
 
-with diag_cols[1]:
-    ci = compute_ci(get_util("util_XRAY"))
-    st.metric("X-ray", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    with ed_cols[0]:
+        ci = compute_ci(get_util("util_triage"))
+        st.metric("Triage", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-with diag_cols[2]:
-    ci = compute_ci(get_util("util_BLOODS"))
-    st.metric("Bloods", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    with ed_cols[1]:
+        ci = compute_ci(get_util("util_ed_bays"))
+        st.metric("ED Bays", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-# --- Downstream: Theatre, ITU, Ward ---
-st.subheader("Downstream (Theatre, ITU, Ward)")
-ds_cols = st.columns(3)
+    # --- Diagnostics ---
+    st.subheader("Diagnostics")
+    diag_cols = st.columns(3)
 
-with ds_cols[0]:
-    ci = compute_ci(get_util("util_theatre"))
-    st.metric("Theatre", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    with diag_cols[0]:
+        ci = compute_ci(get_util("util_CT_SCAN"))
+        st.metric("CT Scanner", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-with ds_cols[1]:
-    ci = compute_ci(get_util("util_itu"))
-    st.metric("ITU", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    with diag_cols[1]:
+        ci = compute_ci(get_util("util_XRAY"))
+        st.metric("X-ray", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
-with ds_cols[2]:
-    ci = compute_ci(get_util("util_ward"))
-    st.metric("Ward", f"{ci['mean']:.1%}")
-    st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+    with diag_cols[2]:
+        ci = compute_ci(get_util("util_BLOODS"))
+        st.metric("Bloods", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+    # --- Downstream: Theatre, ITU, Ward ---
+    st.subheader("Downstream (Theatre, ITU, Ward)")
+    ds_cols = st.columns(3)
+
+    with ds_cols[0]:
+        ci = compute_ci(get_util("util_theatre"))
+        st.metric("Theatre", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+    with ds_cols[1]:
+        ci = compute_ci(get_util("util_itu"))
+        st.metric("ITU", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
+
+    with ds_cols[2]:
+        ci = compute_ci(get_util("util_ward"))
+        st.metric("Ward", f"{ci['mean']:.1%}")
+        st.caption(f"CI: [{ci['ci_lower']:.1%}, {ci['ci_upper']:.1%}]")
 
 # --- Aeromed (if enabled and toggle is checked) ---
 aeromed_total = results.get("aeromed_total", [0] * n_reps)
@@ -1082,6 +1105,394 @@ with st.expander("Calculate Financial Costs", expanded=False):
             file_name="faer_costs.csv",
             mime="text/csv",
         )
+
+st.divider()
+
+# ===== RESULTS PLAYBACK SCHEMATIC =====
+st.header("Results Playback Schematic")
+st.caption("Click on the timeline to see system state at that point in time")
+
+# Check if we have patient-level data for playback
+playback_available = False
+playback_patients = None
+playback_resource_logs = None
+
+# Try to get patient data from session state (from a previous cost calculation run)
+# or run a quick simulation to get it
+if 'playback_collector' in st.session_state:
+    playback_available = True
+    playback_patients = st.session_state['playback_patients']
+    playback_resource_logs = st.session_state['playback_resource_logs']
+
+with st.expander("Simulation Playback", expanded=True):
+    if not playback_available:
+        st.info("""
+        **Playback requires patient-level data.** Click the button below to run a single
+        replication and enable timeline playback of simulation state.
+        """)
+
+        if st.button("Enable Playback (Run Single Replication)", type="primary"):
+            with st.spinner("Running simulation for playback data..."):
+                try:
+                    import simpy
+                    from faer.core.entities import DiagnosticType
+                    from faer.model.full_model import (
+                        AEResources, FullResultsCollector,
+                        arrival_generator_multistream, arrival_generator_single,
+                    )
+                    import itertools
+
+                    # Clone scenario for playback
+                    playback_scenario = scenario.clone_with_seed(scenario.random_seed)
+
+                    # Create fresh environment
+                    env = simpy.Environment()
+
+                    # Create resources
+                    diagnostic_resources = {}
+                    for diag_type, diag_config in playback_scenario.diagnostic_configs.items():
+                        if diag_config.enabled:
+                            diagnostic_resources[diag_type] = simpy.PriorityResource(
+                                env, capacity=diag_config.capacity
+                            )
+
+                    transfer_ambulances = None
+                    transfer_helicopters = None
+                    if playback_scenario.transfer_config.enabled:
+                        transfer_ambulances = simpy.Resource(
+                            env, capacity=playback_scenario.transfer_config.n_transfer_ambulances
+                        )
+                        transfer_helicopters = simpy.Resource(
+                            env, capacity=playback_scenario.transfer_config.n_transfer_helicopters
+                        )
+
+                    theatre_tables = None
+                    itu_beds = None
+                    ward_beds = None
+                    if playback_scenario.downstream_enabled:
+                        if playback_scenario.theatre_config and playback_scenario.theatre_config.enabled:
+                            theatre_tables = simpy.PriorityResource(
+                                env, capacity=playback_scenario.theatre_config.n_tables
+                            )
+                        if playback_scenario.itu_config and playback_scenario.itu_config.enabled:
+                            itu_beds = simpy.Resource(env, capacity=playback_scenario.itu_config.capacity)
+                        if playback_scenario.ward_config and playback_scenario.ward_config.enabled:
+                            ward_beds = simpy.Resource(env, capacity=playback_scenario.ward_config.capacity)
+
+                    hems_slots = None
+                    if playback_scenario.aeromed_config and playback_scenario.aeromed_config.enabled:
+                        if playback_scenario.aeromed_config.hems.enabled:
+                            hems_slots = simpy.Resource(
+                                env, capacity=playback_scenario.aeromed_config.hems.slots_per_day
+                            )
+
+                    resources = AEResources(
+                        triage=simpy.PriorityResource(env, capacity=playback_scenario.n_triage),
+                        ed_bays=simpy.PriorityResource(env, capacity=playback_scenario.n_ed_bays),
+                        handover_bays=simpy.Resource(env, capacity=playback_scenario.n_handover_bays),
+                        ambulance_fleet=simpy.Resource(env, capacity=playback_scenario.n_ambulances),
+                        helicopter_fleet=simpy.Resource(env, capacity=playback_scenario.n_helicopters),
+                        diagnostics=diagnostic_resources,
+                        transfer_ambulances=transfer_ambulances,
+                        transfer_helicopters=transfer_helicopters,
+                        theatre_tables=theatre_tables,
+                        itu_beds=itu_beds,
+                        ward_beds=ward_beds,
+                        hems_slots=hems_slots,
+                    )
+
+                    collector = FullResultsCollector()
+                    patient_counter = itertools.count(1)
+
+                    # Start arrival generators
+                    if playback_scenario.arrival_configs:
+                        for arr_config in playback_scenario.arrival_configs:
+                            env.process(arrival_generator_multistream(
+                                env, resources, arr_config, playback_scenario, collector, patient_counter
+                            ))
+                    else:
+                        env.process(arrival_generator_single(
+                            env, resources, playback_scenario, collector, patient_counter
+                        ))
+
+                    # Run simulation
+                    total_time = playback_scenario.warm_up + playback_scenario.run_length
+                    env.run(until=total_time)
+
+                    # Store in session state
+                    st.session_state['playback_collector'] = True
+                    st.session_state['playback_patients'] = collector.patients
+                    st.session_state['playback_resource_logs'] = collector.resource_logs
+                    st.session_state['playback_scenario'] = playback_scenario
+
+                    playback_available = True
+                    playback_patients = collector.patients
+                    playback_resource_logs = collector.resource_logs
+
+                    st.success(f"Playback data ready! {len(collector.patients)} patients simulated.")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"Error running playback simulation: {str(e)}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+    if playback_available and playback_patients:
+        # Import playback functions
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+
+        from app.components.react_schematic.component import is_built, react_schematic
+        from app.components.react_schematic.data import (
+            build_schematic_at_time,
+            build_timeline_data,
+            to_dict,
+        )
+
+        # Get playback scenario
+        playback_scenario = st.session_state.get('playback_scenario', scenario)
+
+        # Show arrival mode summary (clean display)
+        from collections import Counter
+        from faer.core.entities import ArrivalMode
+
+        mode_counts = Counter(p.mode for p in playback_patients if hasattr(p, 'mode'))
+        ambulance_count = mode_counts.get(ArrivalMode.AMBULANCE, 0)
+        hems_count = mode_counts.get(ArrivalMode.HELICOPTER, 0)
+        walkin_count = mode_counts.get(ArrivalMode.SELF_PRESENTATION, 0)
+
+        # Clean summary metrics
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("Total Patients", len(playback_patients))
+        summary_cols[1].metric("Ambulance", ambulance_count)
+        summary_cols[2].metric("HEMS", hems_count)
+        summary_cols[3].metric("Walk-in", walkin_count)
+
+        # Debug: Show time range info
+        if playback_patients:
+            arrival_times = [p.arrival_time for p in playback_patients]
+            departure_times = [p.departure_time for p in playback_patients if p.departure_time]
+            st.caption(f"Patient arrival range: {min(arrival_times):.0f} - {max(arrival_times):.0f} min | "
+                      f"Departures: {len(departure_times)} | "
+                      f"Warm-up: {playback_scenario.warm_up:.0f}min, Run: {playback_scenario.run_length:.0f}min")
+
+        # Build timeline data
+        timeline_data = build_timeline_data(
+            patients=playback_patients,
+            resource_logs=playback_resource_logs,
+            run_length=playback_scenario.warm_up + playback_scenario.run_length,
+            warm_up=playback_scenario.warm_up,
+            interval_mins=15.0,
+        )
+
+        # Debug: Show timeline data summary
+        st.caption(f"Timeline: {len(timeline_data['time'])} points | "
+                  f"Max in_system: {max(timeline_data['in_system']) if timeline_data['in_system'] else 0} | "
+                  f"Max ED occ: {max(timeline_data['ed_occupancy']) if timeline_data['ed_occupancy'] else 0} | "
+                  f"Total arrivals: {sum(timeline_data['arrivals']) if timeline_data['arrivals'] else 0}")
+
+        # Initialize selected time if not set
+        if 'playback_selected_time' not in st.session_state:
+            # Default to end of simulation
+            st.session_state['playback_selected_time'] = timeline_data['time'][-1] if timeline_data['time'] else playback_scenario.warm_up
+
+        # Create timeline chart using Plotly
+        timeline_df = pd.DataFrame(timeline_data)
+
+        # Convert time to hours for display
+        timeline_df['time_hours'] = timeline_df['time'] / 60
+
+        fig = go.Figure()
+
+        # Add traces
+        fig.add_trace(go.Scatter(
+            x=timeline_df['time_hours'],
+            y=timeline_df['in_system'],
+            mode='lines',
+            name='Patients in System',
+            line=dict(color='#636efa', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(99, 110, 250, 0.2)',
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=timeline_df['time_hours'],
+            y=timeline_df['ed_occupancy'],
+            mode='lines',
+            name='ED Occupancy',
+            line=dict(color='#ff4b4b', width=2),
+        ))
+
+        # Add ITU and Theatre occupancy traces
+        if 'itu_occupancy' in timeline_df.columns:
+            fig.add_trace(go.Scatter(
+                x=timeline_df['time_hours'],
+                y=timeline_df['itu_occupancy'],
+                mode='lines',
+                name='ITU Occupancy',
+                line=dict(color='#ab63fa', width=2, dash='dot'),
+            ))
+
+        if 'theatre_occupancy' in timeline_df.columns:
+            fig.add_trace(go.Scatter(
+                x=timeline_df['time_hours'],
+                y=timeline_df['theatre_occupancy'],
+                mode='lines',
+                name='Theatre Occupancy',
+                line=dict(color='#ffa62b', width=2, dash='dash'),
+            ))
+
+        fig.add_trace(go.Bar(
+            x=timeline_df['time_hours'],
+            y=timeline_df['arrivals'],
+            name='Arrivals (per 15min)',
+            marker_color='rgba(0, 204, 150, 0.6)',
+            yaxis='y2',
+        ))
+
+        # Add vertical line for selected time
+        selected_time_hours = st.session_state['playback_selected_time'] / 60
+        fig.add_vline(
+            x=selected_time_hours,
+            line_dash="dash",
+            line_color="black",
+            line_width=2,
+            annotation_text=f"T={selected_time_hours:.1f}h",
+            annotation_position="top",
+        )
+
+        # Get x-axis range from data
+        min_time_hours = timeline_df['time_hours'].min()
+        max_time_hours = timeline_df['time_hours'].max()
+
+        # Update layout with explicit x-axis range
+        fig.update_layout(
+            title="Simulation Timeline (Click to Select Time)",
+            xaxis_title="Simulation Time (hours)",
+            yaxis_title="Patient Count",
+            xaxis=dict(
+                range=[min_time_hours, max_time_hours],
+                dtick=2,  # Tick every 2 hours
+            ),
+            yaxis2=dict(
+                title="Arrivals",
+                overlaying='y',
+                side='right',
+                showgrid=False,
+            ),
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5
+            ),
+            height=350,
+            margin=dict(l=60, r=60, t=60, b=40),
+        )
+
+        # Render the timeline chart (standard plotly_chart for reliable rendering)
+        st.plotly_chart(fig, use_container_width=True, key="timeline_chart")
+
+        # Time selection slider (full width)
+        min_time_hrs = (timeline_data['time'][0] if timeline_data['time'] else playback_scenario.warm_up) / 60
+        max_time_hrs = (timeline_data['time'][-1] if timeline_data['time'] else playback_scenario.warm_up + playback_scenario.run_length) / 60
+
+        # Format current selection for display in label
+        current_hrs = int(st.session_state['playback_selected_time'] // 60)
+        current_mins = int(st.session_state['playback_selected_time'] % 60)
+
+        selected_time_hrs = st.slider(
+            f"Select Time — Currently: T+{current_hrs}h {current_mins:02d}m",
+            min_value=float(min_time_hrs),
+            max_value=float(max_time_hrs),
+            value=float(st.session_state['playback_selected_time'] / 60),
+            step=0.25,  # 15-minute steps
+            format="%.2f h",
+            key="time_slider",
+        )
+
+        # Convert back to minutes for storage
+        selected_time_mins = selected_time_hrs * 60
+        if abs(selected_time_mins - st.session_state['playback_selected_time']) > 1:  # Allow small float tolerance
+            st.session_state['playback_selected_time'] = selected_time_mins
+            st.rerun()
+
+        # Build and render schematic at selected time
+        st.subheader("System State at Selected Time")
+
+        schematic_data = build_schematic_at_time(
+            patients=playback_patients,
+            resource_logs=playback_resource_logs,
+            timestamp=st.session_state['playback_selected_time'],
+            scenario=playback_scenario,
+        )
+
+        # Summary metrics for this time point
+        metric_cols = st.columns(4)
+        with metric_cols[0]:
+            st.metric("Patients in System", schematic_data.total_in_system)
+        with metric_cols[1]:
+            ed_node = schematic_data.nodes.get('ed_bays')
+            if ed_node:
+                st.metric("ED Occupancy", f"{ed_node.occupied}/{ed_node.capacity}")
+        with metric_cols[2]:
+            st.metric("Est. 24h Throughput", schematic_data.total_throughput_24h)
+        with metric_cols[3]:
+            status_emoji = {"normal": "🟢", "warning": "🟡", "critical": "🔴"}.get(schematic_data.overall_status, "⚪")
+            st.metric("Status", f"{status_emoji} {schematic_data.overall_status.title()}")
+
+        # Render the schematic
+        if is_built():
+            clicked = react_schematic(
+                data=to_dict(schematic_data),
+                width=1200,
+                height=650,
+                key="playback_schematic",
+            )
+
+            if clicked and clicked in schematic_data.nodes:
+                node = schematic_data.nodes[clicked]
+                st.info(f"**{node.label}**: {node.occupied}/{node.capacity or '∞'} occupied, Util: {node.utilisation:.0%}, Wait: {node.mean_wait_mins:.1f}min")
+        else:
+            st.warning("""
+            **React schematic not built.** To enable interactive visualization:
+            ```bash
+            cd app/components/react_schematic
+            npm install && npm run build
+            ```
+            """)
+
+            # Show basic text-based summary instead
+            # Entry nodes (arrival streams)
+            st.markdown("**Entry Nodes (Arrivals in Last Hour):**")
+            entry_data = []
+            for node_id in ['ambulance', 'hems', 'walkin']:
+                node = schematic_data.nodes.get(node_id)
+                if node:
+                    entry_data.append({
+                        "Source": node.label,
+                        "Arrivals/hr": f"{node.throughput_per_hour:.0f}",
+                    })
+            if entry_data:
+                st.dataframe(pd.DataFrame(entry_data), use_container_width=True, hide_index=True)
+
+            # Resource nodes
+            st.markdown("**Resource Occupancy at Selected Time:**")
+            resource_data = []
+            for node_id, node in schematic_data.nodes.items():
+                if node.capacity and node.node_type in ['process', 'resource']:
+                    resource_data.append({
+                        "Resource": node.label,
+                        "Occupied": node.occupied,
+                        "Capacity": node.capacity,
+                        "Utilisation": f"{node.utilisation:.0%}",
+                        "Status": node.status.title(),
+                    })
+            if resource_data:
+                st.dataframe(pd.DataFrame(resource_data), use_container_width=True, hide_index=True)
 
 st.divider()
 

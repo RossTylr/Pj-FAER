@@ -31,6 +31,10 @@ from .interface import (
     InsightCategory,
     MetricsSummary,
     Severity,
+    StructuralAssessment,
+    PeakLoadAnalysis,
+    ExpertPerspective,
+    SystemEvaluation,
 )
 
 
@@ -691,3 +695,738 @@ class HeuristicShadowAgent:
             Always True for heuristic agent
         """
         return True
+
+    # ============ SYSTEM EVALUATION METHODS ============
+
+    def evaluate_system(self, metrics: MetricsSummary) -> SystemEvaluation:
+        """Comprehensive system evaluation with multi-expert perspectives.
+
+        Combines structural analysis, peak load assessment, and expert
+        perspectives from multiple clinical and operational viewpoints.
+
+        Args:
+            metrics: Standardized simulation output summary
+
+        Returns:
+            SystemEvaluation with comprehensive analysis
+        """
+        structural = self._assess_structure(metrics)
+        peak_load = self._analyze_peak_load(metrics)
+        expert_perspectives = self._generate_expert_perspectives(metrics)
+
+        # Determine overall status
+        max_severity = Severity.INFO
+        for perspective in expert_perspectives:
+            if perspective.severity.value == "CRITICAL":
+                max_severity = Severity.CRITICAL
+                break
+            elif perspective.severity.value == "HIGH" and max_severity.value != "CRITICAL":
+                max_severity = Severity.HIGH
+            elif perspective.severity.value == "MEDIUM" and max_severity.value not in ("CRITICAL", "HIGH"):
+                max_severity = Severity.MEDIUM
+
+        status_map = {
+            Severity.CRITICAL: "critical",
+            Severity.HIGH: "warning",
+            Severity.MEDIUM: "caution",
+            Severity.LOW: "normal",
+            Severity.INFO: "normal",
+        }
+        overall_status = status_map[max_severity]
+
+        # Generate executive summary
+        summary = self._generate_executive_summary(
+            metrics, structural, peak_load, expert_perspectives, overall_status
+        )
+
+        return SystemEvaluation(
+            structural=structural,
+            peak_load=peak_load,
+            expert_perspectives=expert_perspectives,
+            overall_system_status=overall_status,
+            summary_text=summary,
+        )
+
+    def _assess_structure(self, metrics: MetricsSummary) -> StructuralAssessment:
+        """Assess structural strengths and weaknesses of the system.
+
+        Analyzes resource configuration and utilisation patterns to identify
+        architectural strengths, vulnerabilities, and bottleneck cascades.
+
+        Args:
+            metrics: Metrics summary
+
+        Returns:
+            StructuralAssessment with strengths, weaknesses, and bottleneck chain
+        """
+        strengths = []
+        weaknesses = []
+        bottleneck_chain = []
+
+        # Calculate headroom for each resource
+        headroom = {
+            "triage": 1.0 - metrics.util_triage,
+            "ed_bays": 1.0 - metrics.util_ed_bays,
+            "itu": 1.0 - metrics.util_itu,
+            "ward": 1.0 - metrics.util_ward,
+            "theatre": 1.0 - metrics.util_theatre,
+        }
+
+        # Identify bottleneck chain (ordered by utilisation, highest first)
+        sorted_resources = sorted(headroom.items(), key=lambda x: x[1])
+        bottleneck_chain = [r[0] for r in sorted_resources if r[1] < 0.30]
+
+        # Structural strengths
+        if metrics.util_triage < 0.70:
+            strengths.append("Triage capacity adequate - patients assessed promptly")
+        if metrics.p_delay < 0.30:
+            strengths.append("Low delay probability - most patients treated immediately")
+        if metrics.util_itu < 0.80 and metrics.util_ward < 0.80:
+            strengths.append("Downstream capacity buffer - reduces ED boarding risk")
+        if metrics.mean_system_time < 180:
+            strengths.append("Good patient throughput - system time under 3 hours")
+        if not bottleneck_chain:
+            strengths.append("Balanced resource utilisation - no critical bottlenecks")
+
+        # Structural weaknesses
+        if metrics.util_ed_bays > 0.85:
+            weaknesses.append("ED bay saturation risk - primary constraint on flow")
+        if metrics.util_itu > 0.90:
+            weaknesses.append("ITU near capacity - limits post-operative and critical admissions")
+        if metrics.util_ward > 0.90:
+            weaknesses.append("Ward saturation - causes upstream blocking")
+        if metrics.mean_treatment_wait > 60:
+            weaknesses.append("High treatment wait times - capacity/demand mismatch")
+        if metrics.mean_boarding_time > 30:
+            weaknesses.append("ED boarding occurring - downstream flow impaired")
+        if metrics.mean_handover_delay > 15:
+            weaknesses.append("Ambulance handover delays - impacts pre-hospital response")
+        if len(bottleneck_chain) > 2:
+            weaknesses.append("Multi-resource bottleneck cascade - systemic capacity issue")
+
+        # Calculate resilience score (0-100)
+        # Higher score = more able to absorb surge
+        resilience_factors = [
+            min(headroom["ed_bays"] * 50, 25),  # ED headroom (max 25)
+            min(headroom["itu"] * 30, 15),       # ITU headroom (max 15)
+            min(headroom["ward"] * 30, 15),      # Ward headroom (max 15)
+            max(0, 15 - (metrics.mean_treatment_wait / 10)),  # Wait time penalty
+            max(0, 15 - (metrics.p_delay * 30)),              # Delay probability penalty
+            max(0, 15 - (metrics.mean_boarding_time / 6)),    # Boarding penalty
+        ]
+        resilience_score = max(0, min(100, sum(resilience_factors)))
+
+        return StructuralAssessment(
+            strengths=strengths,
+            weaknesses=weaknesses,
+            bottleneck_chain=bottleneck_chain,
+            resilience_score=resilience_score,
+            headroom_by_resource=headroom,
+        )
+
+    def _analyze_peak_load(self, metrics: MetricsSummary) -> PeakLoadAnalysis:
+        """Analyze peak load and overloading patterns.
+
+        Examines arrival patterns and capacity stress to identify surge
+        conditions, bolus arrivals, and system recovery characteristics.
+
+        Args:
+            metrics: Metrics summary with raw data access
+
+        Returns:
+            PeakLoadAnalysis with peak/overload assessment
+        """
+        raw = metrics.raw_metrics
+
+        # Get arrival data from raw metrics
+        arrivals_list = raw.get("arrivals", [metrics.arrivals])
+        mean_arrivals = sum(arrivals_list) / len(arrivals_list) if arrivals_list else metrics.arrivals
+
+        # Estimate run length from scenario (default 8 hours)
+        # Try to infer from metrics or use reasonable default
+        run_length_hours = 8.0
+
+        mean_arrival_rate = mean_arrivals / run_length_hours if run_length_hours > 0 else 0
+
+        # Peak analysis - estimate from P95 system times and delay patterns
+        # High P95 relative to mean indicates peaks
+        p95_wait = metrics.p95_treatment_wait
+        mean_wait = metrics.mean_treatment_wait
+        peak_indicator = p95_wait / max(mean_wait, 1.0) if mean_wait > 0 else 1.0
+
+        # Estimate peak arrival rate from variability
+        peak_to_mean_ratio = max(1.0, min(3.0, peak_indicator))
+        peak_arrival_rate = mean_arrival_rate * peak_to_mean_ratio
+
+        # Time above capacity estimation
+        # Based on delay probability and utilisation
+        time_above_capacity = min(100, metrics.p_delay * 100 + max(0, (metrics.util_ed_bays - 0.85) * 200))
+
+        # Bolus pattern detection
+        # High peak-to-mean ratio with high P95 suggests bolus arrivals
+        bolus_detected = peak_to_mean_ratio > 1.5 and metrics.p95_treatment_wait > 60
+
+        # Surge headroom estimation (minutes of surge system can absorb)
+        # Based on queue capacity and service rate
+        ed_headroom = 1.0 - metrics.util_ed_bays
+        estimated_surge_minutes = max(0, ed_headroom * 60 * 2)  # Rough estimate
+
+        # Queue buildup rate (patients/hour during peak)
+        queue_buildup = max(0, peak_arrival_rate - (mean_arrival_rate * (1 - metrics.p_delay)))
+
+        return PeakLoadAnalysis(
+            peak_arrival_rate=peak_arrival_rate,
+            mean_arrival_rate=mean_arrival_rate,
+            peak_to_mean_ratio=peak_to_mean_ratio,
+            time_above_capacity_pct=time_above_capacity,
+            bolus_pattern_detected=bolus_detected,
+            estimated_surge_headroom=estimated_surge_minutes,
+            queue_buildup_rate=queue_buildup,
+        )
+
+    def _generate_expert_perspectives(
+        self, metrics: MetricsSummary
+    ) -> list[ExpertPerspective]:
+        """Generate analysis from multiple expert perspectives.
+
+        Creates domain-specific assessments from clinical and operational
+        viewpoints, each with their own focus areas and concerns.
+
+        Args:
+            metrics: Metrics summary
+
+        Returns:
+            List of ExpertPerspective objects
+        """
+        perspectives = []
+
+        # EM Consultant Perspective
+        perspectives.append(self._em_consultant_perspective(metrics))
+
+        # Anaesthetist Perspective
+        perspectives.append(self._anaesthetist_perspective(metrics))
+
+        # Surgeon Perspective
+        perspectives.append(self._surgeon_perspective(metrics))
+
+        # CBRN Specialist (if relevant metrics present)
+        if metrics.mean_treatment_wait > 0:  # Always include for completeness
+            perspectives.append(self._cbrn_specialist_perspective(metrics))
+
+        # NHS Health Data Scientist Perspective
+        perspectives.append(self._data_scientist_perspective(metrics))
+
+        # Paramedic/Pre-hospital Perspective
+        perspectives.append(self._paramedic_perspective(metrics))
+
+        return perspectives
+
+    def _em_consultant_perspective(self, metrics: MetricsSummary) -> ExpertPerspective:
+        """Emergency Medicine Consultant perspective.
+
+        Focus: Triage priorities (P1-P4), overall ED flow, 4-hour standard.
+        """
+        concerns = []
+        recommendations = []
+
+        # P1 patient concerns
+        p1_count = metrics.arrivals_by_priority.get("P1", 0)
+        if p1_count > 0 and metrics.mean_treatment_wait > 30:
+            concerns.append(
+                f"P1 (immediate) patients may be waiting - {metrics.mean_treatment_wait:.0f}min mean wait"
+            )
+            recommendations.append("Ensure P1 patients bypass queue with dedicated resus pathway")
+
+        # 4-hour standard
+        if metrics.p95_treatment_wait > 180:
+            concerns.append(
+                f"P95 treatment wait {metrics.p95_treatment_wait:.0f}min threatens 4-hour standard"
+            )
+            recommendations.append("Review patient flow, consider streaming minors separately")
+
+        # Boarding concerns
+        if metrics.mean_boarding_time > 30:
+            concerns.append(
+                f"ED boarding average {metrics.mean_boarding_time:.0f}min reduces capacity for new patients"
+            )
+            recommendations.append("Escalate bed management, review discharge processes")
+
+        # Delay probability
+        if metrics.p_delay > 0.5:
+            concerns.append(f"{metrics.p_delay:.0%} of patients delayed - unsustainable demand")
+
+        # Severity assessment
+        if metrics.p95_treatment_wait > 240 or metrics.mean_boarding_time > 60:
+            severity = Severity.CRITICAL
+            assessment = "ED under severe pressure. Patient safety risks present."
+        elif metrics.p_delay > 0.5 or metrics.mean_treatment_wait > 60:
+            severity = Severity.HIGH
+            assessment = "ED flow compromised. Action needed to prevent deterioration."
+        elif metrics.util_ed_bays > 0.80:
+            severity = Severity.MEDIUM
+            assessment = "ED operating near capacity. Monitor for deterioration."
+        else:
+            severity = Severity.INFO
+            assessment = "ED operating within acceptable parameters."
+
+        if not concerns:
+            concerns.append("No immediate clinical concerns from ED perspective")
+
+        return ExpertPerspective(
+            expert_role="em_consultant",
+            expert_title="Emergency Medicine Consultant",
+            focus_area="Triage priorities, ED flow, clinical safety",
+            assessment=assessment,
+            concerns=concerns,
+            recommendations=recommendations if recommendations else ["Continue current protocols"],
+            key_metrics={
+                "mean_treatment_wait": metrics.mean_treatment_wait,
+                "p95_treatment_wait": metrics.p95_treatment_wait,
+                "p_delay": metrics.p_delay,
+                "util_ed_bays": metrics.util_ed_bays,
+                "mean_boarding_time": metrics.mean_boarding_time,
+            },
+            severity=severity,
+        )
+
+    def _anaesthetist_perspective(self, metrics: MetricsSummary) -> ExpertPerspective:
+        """Anaesthetist perspective.
+
+        Focus: ITU pathways, P1 stabilisation, post-operative routing.
+        """
+        concerns = []
+        recommendations = []
+
+        # ITU capacity
+        if metrics.util_itu > 0.90:
+            concerns.append(
+                f"ITU at {metrics.util_itu:.0%} - critical care capacity exhausted"
+            )
+            recommendations.append("Prepare step-down transfers, consider ITU admission criteria review")
+        elif metrics.util_itu > 0.80:
+            concerns.append(
+                f"ITU at {metrics.util_itu:.0%} - limited surge capacity for new critical patients"
+            )
+
+        # Theatre-ITU flow
+        if metrics.util_theatre > 0.70 and metrics.util_itu > 0.85:
+            concerns.append(
+                "Theatre-ITU bottleneck: post-op patients may not have ITU beds available"
+            )
+            recommendations.append("Review elective schedule, prioritise cases not requiring ITU post-op")
+
+        # ITU wait times
+        if metrics.mean_itu_wait > 30:
+            concerns.append(
+                f"ITU bed wait averaging {metrics.mean_itu_wait:.0f}min - delays critical transfers"
+            )
+
+        # P1 stabilisation concerns
+        p1_arrivals = metrics.arrivals_by_priority.get("P1", 0)
+        if p1_arrivals > 0:
+            if metrics.mean_treatment_wait > 15:
+                concerns.append(
+                    "P1 stabilisation may be delayed - assess airway/critical care response times"
+                )
+
+        # Severity
+        if metrics.util_itu > 0.95:
+            severity = Severity.CRITICAL
+            assessment = "Critical care capacity crisis. Post-op and ED critical patients at risk."
+        elif metrics.util_itu > 0.85:
+            severity = Severity.HIGH
+            assessment = "Critical care under pressure. Limited capacity for new deteriorations."
+        elif metrics.util_itu > 0.70:
+            severity = Severity.MEDIUM
+            assessment = "Critical care operating at moderate load. Monitor for surges."
+        else:
+            severity = Severity.INFO
+            assessment = "Critical care capacity adequate for current demand."
+
+        if not concerns:
+            concerns.append("ITU capacity and critical care pathways operating normally")
+
+        return ExpertPerspective(
+            expert_role="anaesthetist",
+            expert_title="Consultant Anaesthetist",
+            focus_area="Critical care, ITU pathways, airway management",
+            assessment=assessment,
+            concerns=concerns,
+            recommendations=recommendations if recommendations else ["Maintain current ITU protocols"],
+            key_metrics={
+                "util_itu": metrics.util_itu,
+                "mean_itu_wait": metrics.mean_itu_wait,
+                "util_theatre": metrics.util_theatre,
+                "itu_admissions": metrics.itu_admissions,
+            },
+            severity=severity,
+        )
+
+    def _surgeon_perspective(self, metrics: MetricsSummary) -> ExpertPerspective:
+        """Surgeon perspective.
+
+        Focus: Theatre capacity, trauma cases, surgical pathway timing.
+        """
+        concerns = []
+        recommendations = []
+
+        # Theatre utilisation
+        if metrics.util_theatre > 0.85:
+            concerns.append(
+                f"Theatre utilisation at {metrics.util_theatre:.0%} - emergency slot availability limited"
+            )
+            recommendations.append("Review emergency theatre scheduling, consider postponing non-urgent electives")
+        elif metrics.util_theatre > 0.70:
+            concerns.append(
+                f"Theatre utilisation at {metrics.util_theatre:.0%} - monitor for emergency capacity"
+            )
+
+        # Theatre wait times
+        if metrics.mean_theatre_wait > 60:
+            concerns.append(
+                f"Mean theatre wait {metrics.mean_theatre_wait:.0f}min - time-sensitive procedures at risk"
+            )
+            recommendations.append("Prioritise life-threatening surgical cases, consider 2nd emergency theatre")
+
+        # Downstream blocking affecting theatre
+        if metrics.util_itu > 0.90 and metrics.util_theatre > 0.50:
+            concerns.append(
+                "ITU saturation may force theatre cancellations for cases requiring ITU post-op"
+            )
+
+        # High acuity arrivals
+        p1_count = metrics.arrivals_by_priority.get("P1", 0)
+        total_arrivals = max(metrics.arrivals, 1)
+        if p1_count / total_arrivals > 0.10:
+            concerns.append(
+                f"High proportion of P1 arrivals ({p1_count/total_arrivals:.0%}) - increased surgical demand likely"
+            )
+
+        # Severity
+        if metrics.util_theatre > 0.90 or metrics.mean_theatre_wait > 120:
+            severity = Severity.CRITICAL
+            assessment = "Theatre capacity critical. Emergency surgical capacity compromised."
+        elif metrics.util_theatre > 0.80:
+            severity = Severity.HIGH
+            assessment = "Theatre utilisation high. Limited flexibility for emergency cases."
+        elif metrics.util_theatre > 0.60:
+            severity = Severity.MEDIUM
+            assessment = "Theatre operating at moderate load. Emergency capacity available."
+        else:
+            severity = Severity.INFO
+            assessment = "Theatre capacity adequate for emergency surgical demand."
+
+        if not concerns:
+            concerns.append("Theatre capacity and surgical pathways operating normally")
+
+        return ExpertPerspective(
+            expert_role="surgeon",
+            expert_title="Trauma Surgeon",
+            focus_area="Theatre capacity, trauma surgery, time-critical procedures",
+            assessment=assessment,
+            concerns=concerns,
+            recommendations=recommendations if recommendations else ["Maintain current surgical protocols"],
+            key_metrics={
+                "util_theatre": metrics.util_theatre,
+                "mean_theatre_wait": metrics.mean_theatre_wait,
+                "theatre_admissions": metrics.theatre_admissions,
+            },
+            severity=severity,
+        )
+
+    def _cbrn_specialist_perspective(self, metrics: MetricsSummary) -> ExpertPerspective:
+        """CBRN Specialist perspective.
+
+        Focus: Decontamination workflows, contamination protocols, surge capacity.
+        Note: CBRN-specific metrics may not be present in standard simulations.
+        """
+        concerns = []
+        recommendations = []
+
+        # Assess surge capacity from CBRN/MCI perspective
+        # CBRN events typically cause bolus arrivals with decon delays
+
+        # ED capacity for MCI
+        if metrics.util_ed_bays > 0.80:
+            concerns.append(
+                f"ED at {metrics.util_ed_bays:.0%} - limited surge capacity for contaminated casualties"
+            )
+            recommendations.append("Identify decon pathway that doesn't consume ED bays")
+
+        # Treatment delays indicating capacity issues
+        if metrics.mean_treatment_wait > 45:
+            concerns.append(
+                f"Current wait times ({metrics.mean_treatment_wait:.0f}min) would compound decon delays (15-45min)"
+            )
+            recommendations.append("Review MCI protocols for parallel decon/triage processing")
+
+        # Downstream capacity for contaminated patients
+        if metrics.util_ward > 0.85:
+            concerns.append(
+                "Limited isolation capacity - contaminated patients may overwhelm ward infection control"
+            )
+
+        # P1 handling capacity
+        p1_arrivals = metrics.arrivals_by_priority.get("P1", 0)
+        if p1_arrivals > 5 and metrics.p_delay > 0.3:
+            concerns.append(
+                "Current system struggles with high-acuity load - CBRN P1 casualties would face critical delays"
+            )
+
+        # Severity - CBRN perspective is about preparedness
+        if metrics.util_ed_bays > 0.90 and metrics.p_delay > 0.5:
+            severity = Severity.HIGH
+            assessment = "System has minimal surge capacity. CBRN event would quickly overwhelm current resources."
+        elif metrics.util_ed_bays > 0.80:
+            severity = Severity.MEDIUM
+            assessment = "Limited CBRN/MCI surge capacity. Recommend contingency planning."
+        else:
+            severity = Severity.INFO
+            assessment = "System has some surge capacity for CBRN/MCI events."
+
+        if not concerns:
+            concerns.append("Adequate baseline capacity for CBRN surge response")
+
+        return ExpertPerspective(
+            expert_role="cbrn_specialist",
+            expert_title="CBRN Specialist",
+            focus_area="Decontamination workflows, MCI surge capacity, contamination protocols",
+            assessment=assessment,
+            concerns=concerns,
+            recommendations=recommendations if recommendations else ["Review CBRN response protocols annually"],
+            key_metrics={
+                "util_ed_bays": metrics.util_ed_bays,
+                "mean_treatment_wait": metrics.mean_treatment_wait,
+                "p_delay": metrics.p_delay,
+                "util_ward": metrics.util_ward,
+            },
+            severity=severity,
+        )
+
+    def _data_scientist_perspective(self, metrics: MetricsSummary) -> ExpertPerspective:
+        """NHS Health Data Scientist perspective.
+
+        Focus: Statistical confidence, metrics design, operational research insights.
+        """
+        concerns = []
+        recommendations = []
+
+        n_reps = metrics.n_replications
+
+        # Replication confidence
+        if n_reps < 10:
+            concerns.append(
+                f"Only {n_reps} replications - confidence intervals may be wide"
+            )
+            recommendations.append("Consider 20+ replications for robust statistical inference")
+
+        # CI overlap concerns
+        for metric_name, (ci_low, ci_high) in metrics.ci_bounds.items():
+            ci_width = ci_high - ci_low
+            mean_val = getattr(metrics, metric_name, ci_low)
+            if mean_val > 0 and ci_width / mean_val > 0.3:
+                concerns.append(
+                    f"{metric_name}: CI width {ci_width:.2f} is >30% of mean - high uncertainty"
+                )
+
+        # Utilisation ceiling effects
+        if metrics.util_ed_bays > 0.95:
+            concerns.append(
+                "ED utilisation >95% - queuing theory predicts exponential wait time growth"
+            )
+            recommendations.append("Target <85% utilisation to maintain linear wait behaviour")
+
+        # Variability indicators
+        if metrics.p95_treatment_wait > 2 * metrics.mean_treatment_wait:
+            concerns.append(
+                f"High wait time variability (P95 = {metrics.p95_treatment_wait/metrics.mean_treatment_wait:.1f}x mean)"
+            )
+            recommendations.append("Investigate causes of wait time variability (arrivals? service times?)")
+
+        # Delay probability interpretation
+        if metrics.p_delay > 0.5:
+            concerns.append(
+                f"P(delay) = {metrics.p_delay:.0%} indicates system operating above effective capacity"
+            )
+
+        # Severity
+        if n_reps < 5 or len(concerns) > 3:
+            severity = Severity.MEDIUM
+            assessment = "Statistical reliability concerns. Results should be interpreted with caution."
+        elif n_reps >= 20 and len(concerns) <= 1:
+            severity = Severity.INFO
+            assessment = "Good statistical basis for results. Confidence intervals are reliable."
+        else:
+            severity = Severity.LOW
+            assessment = "Adequate statistical basis. Consider additional replications for key decisions."
+
+        if not concerns:
+            concerns.append("Statistical metrics indicate robust simulation results")
+
+        return ExpertPerspective(
+            expert_role="data_scientist",
+            expert_title="NHS Health Data Scientist",
+            focus_area="Statistical confidence, CI computation, operational research metrics",
+            assessment=assessment,
+            concerns=concerns,
+            recommendations=recommendations if recommendations else ["Results statistically sound"],
+            key_metrics={
+                "n_replications": float(n_reps),
+                "p_delay": metrics.p_delay,
+                "p95_treatment_wait": metrics.p95_treatment_wait,
+                "mean_treatment_wait": metrics.mean_treatment_wait,
+            },
+            severity=severity,
+        )
+
+    def _paramedic_perspective(self, metrics: MetricsSummary) -> ExpertPerspective:
+        """Paramedic/Pre-hospital perspective.
+
+        Focus: Bolus arrival patterns, ambulance turnaround, handover delays.
+        """
+        concerns = []
+        recommendations = []
+
+        # Handover delays - critical for community response
+        if metrics.mean_handover_delay > 30:
+            concerns.append(
+                f"Mean handover delay {metrics.mean_handover_delay:.0f}min - crews unavailable for 999 calls"
+            )
+            recommendations.append("Implement rapid handover protocol, consider corridor care")
+        elif metrics.mean_handover_delay > 15:
+            concerns.append(
+                f"Handover delays ({metrics.mean_handover_delay:.0f}min) affecting ambulance availability"
+            )
+
+        # Max handover (indicates worst case)
+        if metrics.max_handover_delay > 60:
+            concerns.append(
+                f"Max handover delay {metrics.max_handover_delay:.0f}min - some crews severely impacted"
+            )
+            recommendations.append("Review handover bay capacity and flow to prevent extreme delays")
+
+        # Ambulance arrival volume
+        ambulance_arrivals = metrics.arrivals_by_mode.get("ambulance", 0)
+        helicopter_arrivals = metrics.arrivals_by_mode.get("helicopter", 0)
+        total_arrivals = max(metrics.arrivals, 1)
+        conveyance_rate = (ambulance_arrivals + helicopter_arrivals) / total_arrivals
+
+        if conveyance_rate > 0.6:
+            concerns.append(
+                f"High conveyance rate ({conveyance_rate:.0%}) - ambulance service heavily committed"
+            )
+
+        # ED blocking affecting pre-hospital
+        if metrics.util_ed_bays > 0.90 and metrics.mean_handover_delay > 0:
+            concerns.append(
+                "ED saturation causing ambulance service degradation - community at risk"
+            )
+            recommendations.append("Consider divert, increase handover bays, expedite discharges")
+
+        # Bolus arrival risk (multi-wave delivery)
+        p95_to_mean = metrics.p95_treatment_wait / max(metrics.mean_treatment_wait, 1)
+        if p95_to_mean > 2.0 and ambulance_arrivals > 0:
+            concerns.append(
+                "Wait time variability suggests bolus arrivals - multi-ambulance waves likely"
+            )
+            recommendations.append("Coordinate with ambulance service on arrival spacing if possible")
+
+        # Severity
+        if metrics.mean_handover_delay > 45:
+            severity = Severity.CRITICAL
+            assessment = "Critical handover delays. Community emergency response severely impacted."
+        elif metrics.mean_handover_delay > 20:
+            severity = Severity.HIGH
+            assessment = "Significant handover delays. Ambulance availability reduced."
+        elif metrics.mean_handover_delay > 10:
+            severity = Severity.MEDIUM
+            assessment = "Moderate handover impact. Monitor for deterioration."
+        else:
+            severity = Severity.INFO
+            assessment = "Handover times acceptable. Ambulance service operating normally."
+
+        if not concerns:
+            concerns.append("Ambulance handover and pre-hospital flow operating normally")
+
+        return ExpertPerspective(
+            expert_role="paramedic",
+            expert_title="Paramedic/Pre-hospital Lead",
+            focus_area="Ambulance turnaround, handover delays, bolus arrival patterns",
+            assessment=assessment,
+            concerns=concerns,
+            recommendations=recommendations if recommendations else ["Maintain current handover protocols"],
+            key_metrics={
+                "mean_handover_delay": metrics.mean_handover_delay,
+                "max_handover_delay": metrics.max_handover_delay,
+                "ambulance_arrivals": ambulance_arrivals,
+                "helicopter_arrivals": helicopter_arrivals,
+            },
+            severity=severity,
+        )
+
+    def _generate_executive_summary(
+        self,
+        metrics: MetricsSummary,
+        structural: StructuralAssessment,
+        peak_load: PeakLoadAnalysis,
+        perspectives: list[ExpertPerspective],
+        status: str,
+    ) -> str:
+        """Generate executive summary from all analyses.
+
+        Args:
+            metrics: Metrics summary
+            structural: Structural assessment
+            peak_load: Peak load analysis
+            perspectives: List of expert perspectives
+            status: Overall system status
+
+        Returns:
+            Executive summary text
+        """
+        # Count concerns by severity
+        critical_concerns = sum(1 for p in perspectives if p.severity == Severity.CRITICAL)
+        high_concerns = sum(1 for p in perspectives if p.severity == Severity.HIGH)
+
+        # Build summary
+        lines = []
+
+        # Status headline
+        status_emoji = {"critical": "🔴", "warning": "🟠", "caution": "🟡", "normal": "🟢"}.get(status, "⚪")
+        lines.append(f"**System Status: {status_emoji} {status.upper()}**")
+        lines.append("")
+
+        # Key metrics summary
+        lines.append(f"- **Resilience Score**: {structural.resilience_score:.0f}/100")
+        lines.append(f"- **P(Delay)**: {metrics.p_delay:.0%}")
+        lines.append(f"- **ED Utilisation**: {metrics.util_ed_bays:.0%}")
+        lines.append(f"- **Peak/Mean Ratio**: {peak_load.peak_to_mean_ratio:.1f}x")
+        lines.append("")
+
+        # Bottleneck chain
+        if structural.bottleneck_chain:
+            lines.append(f"**Bottleneck Chain**: {' → '.join(structural.bottleneck_chain)}")
+            lines.append("")
+
+        # Critical concerns
+        if critical_concerns > 0:
+            lines.append(f"**{critical_concerns} CRITICAL concern(s)** require immediate attention.")
+        elif high_concerns > 0:
+            lines.append(f"**{high_concerns} HIGH priority concern(s)** require review.")
+        else:
+            lines.append("No critical or high priority concerns identified.")
+
+        # Top recommendations (from highest severity perspectives)
+        top_recs = []
+        for p in sorted(perspectives, key=lambda x: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2}.get(x.severity.value, 3)):
+            for rec in p.recommendations[:1]:  # Take first recommendation from each
+                if rec not in top_recs and len(top_recs) < 3:
+                    top_recs.append(rec)
+
+        if top_recs:
+            lines.append("")
+            lines.append("**Top Recommendations**:")
+            for rec in top_recs:
+                lines.append(f"- {rec}")
+
+        return "\n".join(lines)

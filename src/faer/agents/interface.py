@@ -425,3 +425,107 @@ class AgentExecutionError(Exception):
     """
 
     pass
+
+
+# ============ SYSTEM EVALUATION DATA MODELS ============
+
+
+@dataclass
+class StructuralAssessment:
+    """Structural strengths and weaknesses assessment.
+
+    Provides high-level analysis of system configuration and
+    performance characteristics from a systems engineering perspective.
+
+    Attributes:
+        strengths: List of system strengths identified
+        weaknesses: List of system vulnerabilities or constraints
+        bottleneck_chain: Ordered list of resources in bottleneck cascade
+        resilience_score: 0-100 score indicating system's ability to handle surge
+        headroom_by_resource: Dict of resource -> remaining capacity fraction
+    """
+
+    strengths: list[str]
+    weaknesses: list[str]
+    bottleneck_chain: list[str]
+    resilience_score: float
+    headroom_by_resource: dict[str, float]
+
+
+@dataclass
+class PeakLoadAnalysis:
+    """Peak load and overloading analysis.
+
+    Analyzes arrival patterns and capacity stress from arrival data,
+    relevant to pre-hospital/paramedic and health data scientist perspectives.
+
+    Attributes:
+        peak_arrival_rate: Maximum arrival rate per hour observed
+        mean_arrival_rate: Average arrival rate per hour
+        peak_to_mean_ratio: Ratio indicating burstiness of arrivals
+        time_above_capacity_pct: Percentage of time system was over threshold
+        bolus_pattern_detected: Whether bolus (wave) arrivals were detected
+        estimated_surge_headroom: Minutes of surge the system can absorb
+        queue_buildup_rate: Rate at which queues grow during peak (patients/hr)
+    """
+
+    peak_arrival_rate: float
+    mean_arrival_rate: float
+    peak_to_mean_ratio: float
+    time_above_capacity_pct: float
+    bolus_pattern_detected: bool
+    estimated_surge_headroom: float
+    queue_buildup_rate: float
+
+
+@dataclass
+class ExpertPerspective:
+    """Single expert perspective on simulation results.
+
+    Represents analysis from a specific clinical or operational viewpoint,
+    providing domain-specific insights that a generalist might miss.
+
+    Attributes:
+        expert_role: Role identifier (e.g., "em_consultant", "anaesthetist")
+        expert_title: Human-readable title (e.g., "Emergency Consultant")
+        focus_area: Primary area of concern for this expert
+        assessment: Overall assessment text
+        concerns: List of specific concerns from this perspective
+        recommendations: List of recommendations from this perspective
+        key_metrics: Dict of metrics most relevant to this expert
+        severity: Overall severity from this expert's viewpoint
+    """
+
+    expert_role: str
+    expert_title: str
+    focus_area: str
+    assessment: str
+    concerns: list[str]
+    recommendations: list[str]
+    key_metrics: dict[str, float]
+    severity: Severity
+
+
+@dataclass
+class SystemEvaluation:
+    """Comprehensive system evaluation combining multiple analysis types.
+
+    Aggregates structural assessment, peak load analysis, and multi-expert
+    perspectives into a unified evaluation suitable for clinical and
+    operational decision-making.
+
+    Attributes:
+        structural: Structural strengths/weaknesses assessment
+        peak_load: Peak load and overloading analysis
+        expert_perspectives: List of expert perspective analyses
+        overall_system_status: Aggregate status (normal, warning, critical)
+        summary_text: Executive summary text
+        timestamp: ISO timestamp of evaluation
+    """
+
+    structural: StructuralAssessment
+    peak_load: PeakLoadAnalysis
+    expert_perspectives: list[ExpertPerspective]
+    overall_system_status: str
+    summary_text: str
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
