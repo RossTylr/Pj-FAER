@@ -9,6 +9,8 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+# But keep React schematic build (needed for hosted deployment)
+!app/components/react_schematic/build/
 develop-eggs/
 dist/
 downloads/
@@ -88,3 +90,6 @@ dmypy.json
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node.js
+node_modules/
