@@ -228,6 +228,15 @@ class MetricsSummary:
     aeromed_slots_missed: float = 0.0
     mean_aeromed_slot_wait: float = 0.0
 
+    # Capacity scaling / OPEL metrics (optional)
+    opel_peak_level: float = 1.0  # Highest OPEL level reached (1-4)
+    opel_transitions: float = 0.0  # Number of OPEL level changes
+    pct_time_at_surge: float = 0.0  # % of time with surge capacity active
+    total_additional_bed_hours: float = 0.0  # Cumulative surge bed-hours
+    patients_diverted: float = 0.0  # Count of diverted patients
+    scale_up_events: float = 0.0  # Number of scale-up activations
+    scale_down_events: float = 0.0  # Number of scale-down deactivations
+
     # Confidence intervals (optional, for display)
     ci_bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
 
@@ -338,6 +347,14 @@ class MetricsSummary:
             aeromed_total=mean_of("aeromed_total", 0),
             aeromed_slots_missed=mean_of("aeromed_slots_missed", 0),
             mean_aeromed_slot_wait=mean_of("mean_aeromed_slot_wait", 0),
+            # Capacity scaling / OPEL
+            opel_peak_level=mean_of("opel_peak_level", 1.0),
+            opel_transitions=mean_of("opel_transitions", 0),
+            pct_time_at_surge=mean_of("pct_time_at_surge", 0),
+            total_additional_bed_hours=mean_of("total_additional_bed_hours", 0),
+            patients_diverted=mean_of("patients_diverted", 0),
+            scale_up_events=mean_of("scale_up_events", 0),
+            scale_down_events=mean_of("scale_down_events", 0),
             # Confidence intervals
             ci_bounds=ci_bounds,
             # Raw

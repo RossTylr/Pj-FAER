@@ -132,25 +132,43 @@ class OPELConfig:
     # OPEL 2 thresholds (85% = "functionally full")
     opel_2_ed_threshold: float = 0.85
     opel_2_ward_threshold: float = 0.85
+    opel_2_itu_threshold: float = 0.85
 
     # OPEL 3 thresholds (90% = corridor care likely, 4hr target at risk)
     opel_3_ed_threshold: float = 0.90
     opel_3_ward_threshold: float = 0.90
+    opel_3_itu_threshold: float = 0.90
 
     # OPEL 4 thresholds (95% = unsafe staffing ratios, care compromised)
     opel_4_ed_threshold: float = 0.95
     opel_4_ward_threshold: float = 0.95
+    opel_4_itu_threshold: float = 0.95
 
-    # OPEL 3 actions
-    opel_3_surge_beds: int = 5
+    # OPEL 3 actions - separate surge capacity per resource type
+    opel_3_ed_surge_beds: int = 5      # ED overflow/corridor care capacity
+    opel_3_ward_surge_beds: int = 3    # Ward escalation beds
+    opel_3_itu_surge_beds: int = 1     # Critical care surge (limited)
     opel_3_los_reduction_pct: float = 10.0
     opel_3_enable_lounge: bool = True
 
-    # OPEL 4 actions
-    opel_4_surge_beds: int = 10
+    # OPEL 4 actions - full surge capacity per resource type
+    opel_4_ed_surge_beds: int = 10     # Full ED surge
+    opel_4_ward_surge_beds: int = 6    # Full ward surge
+    opel_4_itu_surge_beds: int = 2     # Max ITU surge (ventilator limited)
     opel_4_los_reduction_pct: float = 20.0
     opel_4_enable_divert: bool = True
     opel_4_divert_priorities: List[str] = field(default_factory=lambda: ["P4", "P3"])
+
+    # Legacy compatibility - these will be deprecated
+    @property
+    def opel_3_surge_beds(self) -> int:
+        """Legacy: returns ED surge beds for backward compatibility."""
+        return self.opel_3_ed_surge_beds
+
+    @property
+    def opel_4_surge_beds(self) -> int:
+        """Legacy: returns ED surge beds for backward compatibility."""
+        return self.opel_4_ed_surge_beds
 
 
 @dataclass
@@ -207,24 +225,25 @@ def create_opel_rules(config: OPELConfig) -> List[ScalingRule]:
         return rules
 
     # OPEL 3 - ED Surge
-    rules.append(ScalingRule(
-        name="OPEL 3: ED Surge",
-        trigger=ScalingTrigger(
-            trigger_type=ScalingTriggerType.UTILIZATION_ABOVE,
-            resource="ed_bays",
-            threshold=config.opel_3_ed_threshold,
-            sustain_mins=15.0,
-            cooldown_mins=60.0
-        ),
-        action=ScalingAction(
-            action_type=ScalingActionType.ADD_CAPACITY,
-            resource="ed_bays",
-            magnitude=config.opel_3_surge_beds
-        ),
-        auto_deescalate=True,
-        deescalation_threshold=config.opel_2_ed_threshold - 0.05,  # 80%
-        deescalation_delay_mins=30.0
-    ))
+    if config.opel_3_ed_surge_beds > 0:
+        rules.append(ScalingRule(
+            name="OPEL 3: ED Surge",
+            trigger=ScalingTrigger(
+                trigger_type=ScalingTriggerType.UTILIZATION_ABOVE,
+                resource="ed_bays",
+                threshold=config.opel_3_ed_threshold,
+                sustain_mins=15.0,
+                cooldown_mins=60.0
+            ),
+            action=ScalingAction(
+                action_type=ScalingActionType.ADD_CAPACITY,
+                resource="ed_bays",
+                magnitude=config.opel_3_ed_surge_beds
+            ),
+            auto_deescalate=True,
+            deescalation_threshold=config.opel_2_ed_threshold - 0.05,  # 80%
+            deescalation_delay_mins=30.0
+        ))
 
     # OPEL 3 - Discharge Acceleration
     rules.append(ScalingRule(
@@ -246,6 +265,48 @@ def create_opel_rules(config: OPELConfig) -> List[ScalingRule]:
         deescalation_delay_mins=30.0
     ))
 
+    # OPEL 3 - ITU Surge (critical care capacity)
+    if config.opel_3_itu_surge_beds > 0:
+        rules.append(ScalingRule(
+            name="OPEL 3: ITU Surge",
+            trigger=ScalingTrigger(
+                trigger_type=ScalingTriggerType.UTILIZATION_ABOVE,
+                resource="itu_beds",
+                threshold=config.opel_3_itu_threshold,
+                sustain_mins=15.0,
+                cooldown_mins=60.0
+            ),
+            action=ScalingAction(
+                action_type=ScalingActionType.ADD_CAPACITY,
+                resource="itu_beds",
+                magnitude=config.opel_3_itu_surge_beds
+            ),
+            auto_deescalate=True,
+            deescalation_threshold=config.opel_2_itu_threshold - 0.05,  # 80%
+            deescalation_delay_mins=30.0
+        ))
+
+    # OPEL 3 - Ward Surge (escalation beds)
+    if config.opel_3_ward_surge_beds > 0:
+        rules.append(ScalingRule(
+            name="OPEL 3: Ward Surge",
+            trigger=ScalingTrigger(
+                trigger_type=ScalingTriggerType.UTILIZATION_ABOVE,
+                resource="ward_beds",
+                threshold=config.opel_3_ward_threshold,
+                sustain_mins=15.0,
+                cooldown_mins=60.0
+            ),
+            action=ScalingAction(
+                action_type=ScalingActionType.ADD_CAPACITY,
+                resource="ward_beds",
+                magnitude=config.opel_3_ward_surge_beds
+            ),
+            auto_deescalate=True,
+            deescalation_threshold=config.opel_2_ward_threshold - 0.05,  # 80%
+            deescalation_delay_mins=30.0
+        ))
+
     # OPEL 3 - Discharge Lounge
     if config.opel_3_enable_lounge:
         rules.append(ScalingRule(
@@ -266,25 +327,26 @@ def create_opel_rules(config: OPELConfig) -> List[ScalingRule]:
             deescalation_delay_mins=30.0
         ))
 
-    # OPEL 4 - Full Surge
-    rules.append(ScalingRule(
-        name="OPEL 4: Full Surge",
-        trigger=ScalingTrigger(
-            trigger_type=ScalingTriggerType.UTILIZATION_ABOVE,
-            resource="ed_bays",
-            threshold=config.opel_4_ed_threshold,
-            sustain_mins=10.0,  # Faster response at OPEL 4
-            cooldown_mins=60.0
-        ),
-        action=ScalingAction(
-            action_type=ScalingActionType.ADD_CAPACITY,
-            resource="ed_bays",
-            magnitude=config.opel_4_surge_beds
-        ),
-        auto_deescalate=True,
-        deescalation_threshold=config.opel_3_ed_threshold - 0.05,  # 85%
-        deescalation_delay_mins=60.0  # Longer wait before de-escalating from OPEL 4
-    ))
+    # OPEL 4 - ED Full Surge
+    if config.opel_4_ed_surge_beds > 0:
+        rules.append(ScalingRule(
+            name="OPEL 4: ED Full Surge",
+            trigger=ScalingTrigger(
+                trigger_type=ScalingTriggerType.UTILIZATION_ABOVE,
+                resource="ed_bays",
+                threshold=config.opel_4_ed_threshold,
+                sustain_mins=10.0,  # Faster response at OPEL 4
+                cooldown_mins=60.0
+            ),
+            action=ScalingAction(
+                action_type=ScalingActionType.ADD_CAPACITY,
+                resource="ed_bays",
+                magnitude=config.opel_4_ed_surge_beds
+            ),
+            auto_deescalate=True,
+            deescalation_threshold=config.opel_3_ed_threshold - 0.05,  # 85%
+            deescalation_delay_mins=60.0  # Longer wait before de-escalating from OPEL 4
+        ))
 
     # OPEL 4 - Aggressive Discharge
     rules.append(ScalingRule(
@@ -305,6 +367,48 @@ def create_opel_rules(config: OPELConfig) -> List[ScalingRule]:
         deescalation_threshold=config.opel_3_ward_threshold - 0.05,  # 85%
         deescalation_delay_mins=60.0
     ))
+
+    # OPEL 4 - ITU Full Surge (critical care crisis)
+    if config.opel_4_itu_surge_beds > 0:
+        rules.append(ScalingRule(
+            name="OPEL 4: ITU Full Surge",
+            trigger=ScalingTrigger(
+                trigger_type=ScalingTriggerType.UTILIZATION_ABOVE,
+                resource="itu_beds",
+                threshold=config.opel_4_itu_threshold,
+                sustain_mins=10.0,  # Faster response at OPEL 4
+                cooldown_mins=60.0
+            ),
+            action=ScalingAction(
+                action_type=ScalingActionType.ADD_CAPACITY,
+                resource="itu_beds",
+                magnitude=config.opel_4_itu_surge_beds
+            ),
+            auto_deescalate=True,
+            deescalation_threshold=config.opel_3_itu_threshold - 0.05,  # 85%
+            deescalation_delay_mins=60.0  # Longer wait before de-escalating from OPEL 4
+        ))
+
+    # OPEL 4 - Ward Full Surge
+    if config.opel_4_ward_surge_beds > 0:
+        rules.append(ScalingRule(
+            name="OPEL 4: Ward Full Surge",
+            trigger=ScalingTrigger(
+                trigger_type=ScalingTriggerType.UTILIZATION_ABOVE,
+                resource="ward_beds",
+                threshold=config.opel_4_ward_threshold,
+                sustain_mins=10.0,
+                cooldown_mins=60.0
+            ),
+            action=ScalingAction(
+                action_type=ScalingActionType.ADD_CAPACITY,
+                resource="ward_beds",
+                magnitude=config.opel_4_ward_surge_beds
+            ),
+            auto_deescalate=True,
+            deescalation_threshold=config.opel_3_ward_threshold - 0.05,  # 85%
+            deescalation_delay_mins=60.0
+        ))
 
     # OPEL 4 - Ambulance Diversion
     if config.opel_4_enable_divert:

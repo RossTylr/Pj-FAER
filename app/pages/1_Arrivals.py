@@ -89,327 +89,8 @@ def init_session_defaults():
 init_session_defaults()
 
 # ============================================================
-# SECTION 1: EMERGENCY SERVICES
+# SECTION 1: ARRIVAL PROFILES
 # ============================================================
-st.header("Emergency Services")
-
-st.markdown("""
-Configure the emergency service fleet that brings patients to the ED.
-These resources determine arrival capacity and turnaround constraints.
-
-**Simulation linkage**: Creates `simpy.Resource` for fleet management.
-""")
-
-# Three columns for the three arrival modes
-col_amb, col_heli, col_walk = st.columns(3)
-
-# ---------------- AMBULANCE ----------------
-with col_amb:
-    st.subheader("Ambulance Service")
-
-    with st.container(border=True):
-        # Fleet size - maps to FullScenario.n_ambulances
-        n_ambulances = st.number_input(
-            "Available Ambulances",
-            min_value=1,
-            max_value=50,
-            value=st.session_state.n_ambulances,
-            key="input_n_ambulances",
-            help="Maps to FullScenario.n_ambulances -> simpy.Resource"
-        )
-        st.session_state.n_ambulances = n_ambulances
-
-        # Turnaround - maps to FullScenario.ambulance_turnaround_mins
-        amb_turnaround = st.number_input(
-            "Turnaround Time (mins)",
-            min_value=15.0,
-            max_value=120.0,
-            value=float(st.session_state.ambulance_turnaround),
-            step=5.0,
-            key="input_amb_turnaround",
-            help="Time from patient delivery to vehicle available. Maps to FullScenario.ambulance_turnaround_mins"
-        )
-        st.session_state.ambulance_turnaround = amb_turnaround
-
-        # Litters per ambulance (extension)
-        litters = st.number_input(
-            "Litters per Ambulance",
-            min_value=1,
-            max_value=2,
-            value=st.session_state.litters_per_ambulance,
-            key="input_litters",
-            help="Patient capacity per vehicle (1 standard, 2 for MCI config)"
-        )
-        st.session_state.litters_per_ambulance = litters
-
-        # Calculated capacity metric
-        hourly_capacity = n_ambulances * (60 / amb_turnaround) * litters
-        st.metric(
-            "Max Arrivals/Hour",
-            f"{hourly_capacity:.1f}",
-            help="Theoretical max: n_ambulances x (60/turnaround) x litters"
-        )
-
-        # Acuity distribution (read-only, from typical ambulance data)
-        st.markdown("**Typical Acuity Mix** *(read-only)*")
-        st.caption("Based on ambulance conveyance patterns")
-
-        # These could be made configurable if needed
-        amb_acuity = {
-            Priority.P1_IMMEDIATE: 0.15,
-            Priority.P2_VERY_URGENT: 0.40,
-            Priority.P3_URGENT: 0.35,
-            Priority.P4_STANDARD: 0.10
-        }
-
-        for priority, proportion in amb_acuity.items():
-            label = priority.name.replace('_', ' ').title()
-            st.progress(proportion, text=f"{label}: {proportion:.0%}")
-
-# ---------------- HELICOPTER (HEMS) ----------------
-with col_heli:
-    st.subheader("HEMS / Air Ambulance")
-
-    with st.container(border=True):
-        # Fleet size - maps to FullScenario.n_helicopters
-        n_helicopters = st.number_input(
-            "Aircraft Available",
-            min_value=0,
-            max_value=5,
-            value=st.session_state.n_helicopters,
-            key="input_n_helicopters",
-            help="Maps to FullScenario.n_helicopters -> simpy.Resource"
-        )
-        st.session_state.n_helicopters = n_helicopters
-
-        # Turnaround - maps to FullScenario.helicopter_turnaround_mins
-        heli_turnaround = st.number_input(
-            "Turnaround Time (mins)",
-            min_value=30.0,
-            max_value=180.0,
-            value=float(st.session_state.helicopter_turnaround),
-            step=10.0,
-            key="input_heli_turnaround",
-            help="Refuel, crew change, mission reset. Maps to FullScenario.helicopter_turnaround_mins"
-        )
-        st.session_state.helicopter_turnaround = heli_turnaround
-
-        # Operating hours note
-        st.info("HEMS typically operates 07:00-02:00 (19 hrs)")
-
-        # Calculated capacity
-        if n_helicopters > 0:
-            # 19 hours of operation
-            heli_daily = n_helicopters * 19 * (60 / heli_turnaround)
-            st.metric("Max Daily Missions", f"{heli_daily:.0f}")
-        else:
-            st.metric("Max Daily Missions", "0")
-            st.warning("No HEMS coverage configured")
-
-        # Acuity distribution (HEMS = highest acuity)
-        st.markdown("**Typical Acuity Mix** *(read-only)*")
-        st.caption("HEMS carries highest acuity patients")
-
-        hems_acuity = {
-            Priority.P1_IMMEDIATE: 0.70,
-            Priority.P2_VERY_URGENT: 0.25,
-            Priority.P3_URGENT: 0.05,
-            Priority.P4_STANDARD: 0.00
-        }
-
-        for priority, proportion in hems_acuity.items():
-            if proportion > 0:
-                label = priority.name.replace('_', ' ').title()
-                st.progress(proportion, text=f"{label}: {proportion:.0%}")
-
-# ---------------- WALK-IN ----------------
-with col_walk:
-    st.subheader("Self-Presentation (Walk-in)")
-
-    with st.container(border=True):
-        st.markdown("**No fleet constraint**")
-        st.caption("Walk-in patients not limited by vehicle availability")
-
-        walkin_enabled = st.checkbox(
-            "Enable Walk-in Arrivals",
-            value=st.session_state.walkin_enabled,
-            key="input_walkin_enabled",
-            help="Uncheck to model ambulance-only scenarios (e.g., MCI)"
-        )
-        st.session_state.walkin_enabled = walkin_enabled
-
-        if walkin_enabled:
-            # Walk-in scaling - maps to FullScenario.walkin_rate_multiplier
-            walkin_scale = st.slider(
-                "Walk-in Volume Scale",
-                min_value=0.0,
-                max_value=2.0,
-                value=float(st.session_state.walkin_rate_multiplier),
-                step=0.1,
-                key="input_walkin_scale",
-                help="Maps to FullScenario.walkin_rate_multiplier"
-            )
-            st.session_state.walkin_rate_multiplier = walkin_scale
-
-            # Acuity distribution (walk-ins = lower acuity)
-            st.markdown("**Typical Acuity Mix** *(read-only)*")
-            st.caption("Walk-ins typically lower acuity")
-
-            walkin_acuity = {
-                Priority.P1_IMMEDIATE: 0.02,
-                Priority.P2_VERY_URGENT: 0.15,
-                Priority.P3_URGENT: 0.45,
-                Priority.P4_STANDARD: 0.38
-            }
-
-            for priority, proportion in walkin_acuity.items():
-                if proportion > 0.05:  # Only show significant
-                    label = priority.name.replace('_', ' ').title()
-                    st.progress(proportion, text=f"{label}: {proportion:.0%}")
-        else:
-            st.warning("Walk-in arrivals disabled")
-            st.session_state.walkin_rate_multiplier = 0.0
-
-# ============================================================
-# SECTION 2: HANDOVER GATE
-# ============================================================
-st.markdown("---")
-st.header("Handover Gate")
-
-st.markdown("""
-Ambulance and HEMS crews hand over patients at the handover bay.
-When the ED is congested, handover delays occur (crews wait with patients).
-
-**Critical feedback mechanism**: Full ED -> delayed handover release ->
-ambulance crews wait -> 999 response delays in community.
-
-**Simulation linkage**: Creates `simpy.Resource(n_handover_bays)`.
-Handover bay is held until patient acquires ED bay.
-""")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    # Maps to FullScenario.n_handover_bays
-    n_handover = st.number_input(
-        "Handover Bays",
-        min_value=1,
-        max_value=20,
-        value=st.session_state.n_handover_bays,
-        key="input_n_handover",
-        help="Physical spaces for ambulance handover. Maps to FullScenario.n_handover_bays"
-    )
-    st.session_state.n_handover_bays = n_handover
-
-with col2:
-    # Maps to FullScenario.handover_time_mean
-    handover_time = st.number_input(
-        "Handover Time Mean (mins)",
-        min_value=5.0,
-        max_value=60.0,
-        value=float(st.session_state.handover_time_mean),
-        step=1.0,
-        key="input_handover_time",
-        help="Average time for clinical handover process. Maps to FullScenario.handover_time_mean"
-    )
-    st.session_state.handover_time_mean = handover_time
-
-with col3:
-    # Maps to FullScenario.handover_time_cv
-    handover_cv = st.slider(
-        "Handover Time Variability (CV)",
-        min_value=0.1,
-        max_value=0.8,
-        value=float(st.session_state.handover_time_cv),
-        step=0.05,
-        key="input_handover_cv",
-        help="Coefficient of variation. Higher = more variable handover times."
-    )
-    st.session_state.handover_time_cv = handover_cv
-
-# Capacity check
-st.markdown("**Capacity Validation**")
-
-handover_capacity_per_hour = n_handover * (60 / handover_time)
-ambulance_rate_per_hour = n_ambulances * (60 / amb_turnaround)
-total_conveyed_rate = ambulance_rate_per_hour + (n_helicopters * (60 / heli_turnaround) if n_helicopters > 0 else 0)
-
-col1, col2 = st.columns(2)
-with col1:
-    st.metric("Handover Throughput", f"{handover_capacity_per_hour:.1f}/hr")
-with col2:
-    st.metric("Max Conveyed Arrivals", f"{total_conveyed_rate:.1f}/hr")
-
-if total_conveyed_rate > handover_capacity_per_hour * 0.9:
-    st.warning(f"Conveyed arrivals ({total_conveyed_rate:.1f}/hr) approaching handover capacity ({handover_capacity_per_hour:.1f}/hr). Risk of handover delays.")
-elif total_conveyed_rate > handover_capacity_per_hour:
-    st.error(f"Conveyed arrivals ({total_conveyed_rate:.1f}/hr) EXCEED handover capacity ({handover_capacity_per_hour:.1f}/hr). Handover delays guaranteed.")
-else:
-    st.success(f"Handover capacity ({handover_capacity_per_hour:.1f}/hr) sufficient for conveyed rate ({total_conveyed_rate:.1f}/hr)")
-
-# ============================================================
-# SECTION 3: SESSION STATE SUMMARY
-# ============================================================
-st.markdown("---")
-st.header("Emergency Services Summary")
-
-with st.container(border=True):
-    summary_data = {
-        'Parameter': [
-            'Ambulances',
-            'Amb Turnaround (min)',
-            'Helicopters',
-            'Heli Turnaround (min)',
-            'Handover Bays',
-            'Handover Time (min)',
-            'Walk-in Enabled',
-            'Walk-in Scale'
-        ],
-        'Value': [
-            st.session_state.n_ambulances,
-            st.session_state.ambulance_turnaround,
-            st.session_state.n_helicopters,
-            st.session_state.helicopter_turnaround,
-            st.session_state.n_handover_bays,
-            st.session_state.handover_time_mean,
-            'Yes' if st.session_state.walkin_enabled else 'No',
-            f"{st.session_state.walkin_rate_multiplier:.1f}x"
-        ],
-        'FullScenario Attribute': [
-            'n_ambulances',
-            'ambulance_turnaround_mins',
-            'n_helicopters',
-            'helicopter_turnaround_mins',
-            'n_handover_bays',
-            'handover_time_mean',
-            'walkin_rate_multiplier > 0',
-            'walkin_rate_multiplier'
-        ]
-    }
-
-    st.dataframe(
-        pd.DataFrame(summary_data),
-        use_container_width=True,
-        hide_index=True
-    )
-
-    st.caption("These values are stored in st.session_state and used when building FullScenario for simulation.")
-
-# ============================================================
-# NAVIGATION HINT
-# ============================================================
-st.markdown("---")
-st.info("""
-**Next Steps:**
-- Continue to **Arrival Profiles** section below to configure timing patterns
-- Or go to **2_Resources** page to configure ED, diagnostics, and downstream capacity
-- **Run** page will combine all settings into a FullScenario for simulation
-""")
-
-# ============================================================
-# SECTION 4: ARRIVAL PROFILES (Phase 8a-2 content)
-# ============================================================
-st.markdown("---")
 st.header("Arrival Profiles")
 
 st.markdown("""
@@ -909,6 +590,314 @@ elif arrival_model == 'detailed':
                         st.error(f"CSV must have columns: {required_cols}")
                 except Exception as e:
                     st.error(f"Error loading CSV: {e}")
+
+# ============================================================
+# SECTION 2: EMERGENCY SERVICES
+# ============================================================
+st.markdown("---")
+st.header("Emergency Services")
+
+st.markdown("""
+Configure the emergency service fleet that brings patients to the ED.
+These resources determine arrival capacity and turnaround constraints.
+
+**Simulation linkage**: Creates `simpy.Resource` for fleet management.
+""")
+
+# Three columns for the three arrival modes
+col_amb, col_heli, col_walk = st.columns(3)
+
+# ---------------- AMBULANCE ----------------
+with col_amb:
+    st.subheader("Ambulance Service")
+
+    with st.container(border=True):
+        # Fleet size - maps to FullScenario.n_ambulances
+        n_ambulances = st.number_input(
+            "Available Ambulances",
+            min_value=1,
+            max_value=50,
+            value=st.session_state.n_ambulances,
+            key="input_n_ambulances",
+            help="Maps to FullScenario.n_ambulances -> simpy.Resource"
+        )
+        st.session_state.n_ambulances = n_ambulances
+
+        # Turnaround - maps to FullScenario.ambulance_turnaround_mins
+        amb_turnaround = st.number_input(
+            "Turnaround Time (mins)",
+            min_value=15.0,
+            max_value=120.0,
+            value=float(st.session_state.ambulance_turnaround),
+            step=5.0,
+            key="input_amb_turnaround",
+            help="Time from patient delivery to vehicle available. Maps to FullScenario.ambulance_turnaround_mins"
+        )
+        st.session_state.ambulance_turnaround = amb_turnaround
+
+        # Litters per ambulance (extension)
+        litters = st.number_input(
+            "Litters per Ambulance",
+            min_value=1,
+            max_value=2,
+            value=st.session_state.litters_per_ambulance,
+            key="input_litters",
+            help="Patient capacity per vehicle (1 standard, 2 for MCI config)"
+        )
+        st.session_state.litters_per_ambulance = litters
+
+        # Calculated capacity metric
+        hourly_capacity = n_ambulances * (60 / amb_turnaround) * litters
+        st.metric(
+            "Max Arrivals/Hour",
+            f"{hourly_capacity:.1f}",
+            help="Theoretical max: n_ambulances x (60/turnaround) x litters"
+        )
+
+        # Acuity distribution (read-only, from typical ambulance data)
+        st.markdown("**Typical Acuity Mix** *(read-only)*")
+        st.caption("Based on ambulance conveyance patterns")
+
+        # These could be made configurable if needed
+        amb_acuity = {
+            Priority.P1_IMMEDIATE: 0.15,
+            Priority.P2_VERY_URGENT: 0.40,
+            Priority.P3_URGENT: 0.35,
+            Priority.P4_STANDARD: 0.10
+        }
+
+        for priority, proportion in amb_acuity.items():
+            label = priority.name.replace('_', ' ').title()
+            st.progress(proportion, text=f"{label}: {proportion:.0%}")
+
+# ---------------- HELICOPTER (HEMS) ----------------
+with col_heli:
+    st.subheader("HEMS / Air Ambulance")
+
+    with st.container(border=True):
+        # Fleet size - maps to FullScenario.n_helicopters
+        n_helicopters = st.number_input(
+            "Aircraft Available",
+            min_value=0,
+            max_value=5,
+            value=st.session_state.n_helicopters,
+            key="input_n_helicopters",
+            help="Maps to FullScenario.n_helicopters -> simpy.Resource"
+        )
+        st.session_state.n_helicopters = n_helicopters
+
+        # Turnaround - maps to FullScenario.helicopter_turnaround_mins
+        heli_turnaround = st.number_input(
+            "Turnaround Time (mins)",
+            min_value=30.0,
+            max_value=180.0,
+            value=float(st.session_state.helicopter_turnaround),
+            step=10.0,
+            key="input_heli_turnaround",
+            help="Refuel, crew change, mission reset. Maps to FullScenario.helicopter_turnaround_mins"
+        )
+        st.session_state.helicopter_turnaround = heli_turnaround
+
+        # Operating hours note
+        st.info("HEMS typically operates 07:00-02:00 (19 hrs)")
+
+        # Calculated capacity
+        if n_helicopters > 0:
+            # 19 hours of operation
+            heli_daily = n_helicopters * 19 * (60 / heli_turnaround)
+            st.metric("Max Daily Missions", f"{heli_daily:.0f}")
+        else:
+            st.metric("Max Daily Missions", "0")
+            st.warning("No HEMS coverage configured")
+
+        # Acuity distribution (HEMS = highest acuity)
+        st.markdown("**Typical Acuity Mix** *(read-only)*")
+        st.caption("HEMS carries highest acuity patients")
+
+        hems_acuity = {
+            Priority.P1_IMMEDIATE: 0.70,
+            Priority.P2_VERY_URGENT: 0.25,
+            Priority.P3_URGENT: 0.05,
+            Priority.P4_STANDARD: 0.00
+        }
+
+        for priority, proportion in hems_acuity.items():
+            if proportion > 0:
+                label = priority.name.replace('_', ' ').title()
+                st.progress(proportion, text=f"{label}: {proportion:.0%}")
+
+# ---------------- WALK-IN ----------------
+with col_walk:
+    st.subheader("Self-Presentation (Walk-in)")
+
+    with st.container(border=True):
+        st.markdown("**No fleet constraint**")
+        st.caption("Walk-in patients not limited by vehicle availability")
+
+        walkin_enabled = st.checkbox(
+            "Enable Walk-in Arrivals",
+            value=st.session_state.walkin_enabled,
+            key="input_walkin_enabled",
+            help="Uncheck to model ambulance-only scenarios (e.g., MCI)"
+        )
+        st.session_state.walkin_enabled = walkin_enabled
+
+        if walkin_enabled:
+            # Walk-in scaling - maps to FullScenario.walkin_rate_multiplier
+            walkin_scale = st.slider(
+                "Walk-in Volume Scale",
+                min_value=0.0,
+                max_value=2.0,
+                value=float(st.session_state.walkin_rate_multiplier),
+                step=0.1,
+                key="input_walkin_scale",
+                help="Maps to FullScenario.walkin_rate_multiplier"
+            )
+            st.session_state.walkin_rate_multiplier = walkin_scale
+
+            # Acuity distribution (walk-ins = lower acuity)
+            st.markdown("**Typical Acuity Mix** *(read-only)*")
+            st.caption("Walk-ins typically lower acuity")
+
+            walkin_acuity = {
+                Priority.P1_IMMEDIATE: 0.02,
+                Priority.P2_VERY_URGENT: 0.15,
+                Priority.P3_URGENT: 0.45,
+                Priority.P4_STANDARD: 0.38
+            }
+
+            for priority, proportion in walkin_acuity.items():
+                if proportion > 0.05:  # Only show significant
+                    label = priority.name.replace('_', ' ').title()
+                    st.progress(proportion, text=f"{label}: {proportion:.0%}")
+        else:
+            st.warning("Walk-in arrivals disabled")
+            st.session_state.walkin_rate_multiplier = 0.0
+
+# ============================================================
+# SECTION 3: HANDOVER GATE
+# ============================================================
+st.markdown("---")
+st.header("Handover Gate")
+
+st.markdown("""
+Ambulance and HEMS crews hand over patients at the handover bay.
+When the ED is congested, handover delays occur (crews wait with patients).
+
+**Critical feedback mechanism**: Full ED -> delayed handover release ->
+ambulance crews wait -> 999 response delays in community.
+
+**Simulation linkage**: Creates `simpy.Resource(n_handover_bays)`.
+Handover bay is held until patient acquires ED bay.
+""")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    # Maps to FullScenario.n_handover_bays
+    n_handover = st.number_input(
+        "Handover Bays",
+        min_value=1,
+        max_value=20,
+        value=st.session_state.n_handover_bays,
+        key="input_n_handover",
+        help="Physical spaces for ambulance handover. Maps to FullScenario.n_handover_bays"
+    )
+    st.session_state.n_handover_bays = n_handover
+
+with col2:
+    # Maps to FullScenario.handover_time_mean
+    handover_time = st.number_input(
+        "Handover Time Mean (mins)",
+        min_value=5.0,
+        max_value=60.0,
+        value=float(st.session_state.handover_time_mean),
+        step=1.0,
+        key="input_handover_time",
+        help="Average time for clinical handover process. Maps to FullScenario.handover_time_mean"
+    )
+    st.session_state.handover_time_mean = handover_time
+
+with col3:
+    # Maps to FullScenario.handover_time_cv
+    handover_cv = st.slider(
+        "Handover Time Variability (CV)",
+        min_value=0.1,
+        max_value=0.8,
+        value=float(st.session_state.handover_time_cv),
+        step=0.05,
+        key="input_handover_cv",
+        help="Coefficient of variation. Higher = more variable handover times."
+    )
+    st.session_state.handover_time_cv = handover_cv
+
+# Capacity check
+st.markdown("**Capacity Validation**")
+
+handover_capacity_per_hour = n_handover * (60 / handover_time)
+ambulance_rate_per_hour = n_ambulances * (60 / amb_turnaround)
+total_conveyed_rate = ambulance_rate_per_hour + (n_helicopters * (60 / heli_turnaround) if n_helicopters > 0 else 0)
+
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("Handover Throughput", f"{handover_capacity_per_hour:.1f}/hr")
+with col2:
+    st.metric("Max Conveyed Arrivals", f"{total_conveyed_rate:.1f}/hr")
+
+if total_conveyed_rate > handover_capacity_per_hour * 0.9:
+    st.warning(f"Conveyed arrivals ({total_conveyed_rate:.1f}/hr) approaching handover capacity ({handover_capacity_per_hour:.1f}/hr). Risk of handover delays.")
+elif total_conveyed_rate > handover_capacity_per_hour:
+    st.error(f"Conveyed arrivals ({total_conveyed_rate:.1f}/hr) EXCEED handover capacity ({handover_capacity_per_hour:.1f}/hr). Handover delays guaranteed.")
+else:
+    st.success(f"Handover capacity ({handover_capacity_per_hour:.1f}/hr) sufficient for conveyed rate ({total_conveyed_rate:.1f}/hr)")
+
+# ============================================================
+# SECTION 4: EMERGENCY SERVICES SUMMARY
+# ============================================================
+st.markdown("---")
+st.header("Emergency Services Summary")
+
+with st.container(border=True):
+    summary_data = {
+        'Parameter': [
+            'Ambulances',
+            'Amb Turnaround (min)',
+            'Helicopters',
+            'Heli Turnaround (min)',
+            'Handover Bays',
+            'Handover Time (min)',
+            'Walk-in Enabled',
+            'Walk-in Scale'
+        ],
+        'Value': [
+            st.session_state.n_ambulances,
+            st.session_state.ambulance_turnaround,
+            st.session_state.n_helicopters,
+            st.session_state.helicopter_turnaround,
+            st.session_state.n_handover_bays,
+            st.session_state.handover_time_mean,
+            'Yes' if st.session_state.walkin_enabled else 'No',
+            f"{st.session_state.walkin_rate_multiplier:.1f}x"
+        ],
+        'FullScenario Attribute': [
+            'n_ambulances',
+            'ambulance_turnaround_mins',
+            'n_helicopters',
+            'helicopter_turnaround_mins',
+            'n_handover_bays',
+            'handover_time_mean',
+            'walkin_rate_multiplier > 0',
+            'walkin_rate_multiplier'
+        ]
+    }
+
+    st.dataframe(
+        pd.DataFrame(summary_data),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.caption("These values are stored in st.session_state and used when building FullScenario for simulation.")
 
 # ============================================================
 # SECTION 5: CONFIGURATION VALIDATION

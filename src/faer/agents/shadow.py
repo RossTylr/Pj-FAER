@@ -249,6 +249,103 @@ NHS_THRESHOLDS = [
             "for discharge. Engage discharge coordination team."
         ),
     ),
+    # === OPEL/CAPACITY SCALING THRESHOLDS ===
+    # OPEL 4 reached
+    ClinicalThreshold(
+        metric="opel_peak_level",
+        threshold=4.0,
+        operator="gte",
+        severity=Severity.CRITICAL,
+        category=InsightCategory.CAPACITY,
+        title="OPEL 4 Critical Status Reached",
+        message_template=(
+            "System reached OPEL Level 4 (critical). This indicates full "
+            "capacity crisis with all escalation options exhausted. Patient "
+            "diversion may be occurring. Hospital-wide response required."
+        ),
+        recommendation=(
+            "Activate hospital-wide emergency protocol. Escalate to executive "
+            "on-call. Consider mutual aid from partner trusts. Review all "
+            "patients for discharge/transfer. Maximum surge capacity activated."
+        ),
+    ),
+    # OPEL 3 reached (severe pressure)
+    ClinicalThreshold(
+        metric="opel_peak_level",
+        threshold=3.0,
+        operator="gte",
+        severity=Severity.HIGH,
+        category=InsightCategory.CAPACITY,
+        title="OPEL 3 Severe Pressure",
+        message_template=(
+            "System reached OPEL Level 3 (severe pressure). Surge capacity "
+            "should be activated and discharge acceleration in effect. "
+            "Without intervention, escalation to OPEL 4 is likely."
+        ),
+        recommendation=(
+            "Activate OPEL 3 surge capacity. Focus on discharge acceleration. "
+            "Open discharge lounge. Consider postponing non-urgent electives. "
+            "Hourly capacity reviews until situation stabilises."
+        ),
+    ),
+    # Excessive time at surge capacity
+    ClinicalThreshold(
+        metric="pct_time_at_surge",
+        threshold=30.0,
+        operator="gt",
+        severity=Severity.HIGH,
+        category=InsightCategory.CAPACITY,
+        title="Extended Surge Activation",
+        message_template=(
+            "System spent {value:.0f}% of time at surge capacity. Sustained "
+            "reliance on surge indicates baseline capacity is structurally "
+            "insufficient. Staff fatigue and safety risks increase with "
+            "prolonged escalation."
+        ),
+        recommendation=(
+            "Review baseline capacity adequacy. Surge should be temporary, "
+            "not routine. Consider permanent capacity increase or demand "
+            "management strategies."
+        ),
+    ),
+    # Patient diversion occurring
+    ClinicalThreshold(
+        metric="patients_diverted",
+        threshold=1.0,
+        operator="gte",
+        severity=Severity.CRITICAL,
+        category=InsightCategory.PATIENT_SAFETY,
+        title="Patient Diversion Active",
+        message_template=(
+            "{value:.0f} patient(s) diverted to alternative facilities. "
+            "Diversion indicates complete capacity exhaustion. Diverted "
+            "patients face longer transport times and unfamiliar care teams."
+        ),
+        recommendation=(
+            "Immediate system review required. Diversion is last-resort measure. "
+            "Coordinate with receiving hospitals. Track diverted patient outcomes. "
+            "Document for post-event analysis."
+        ),
+    ),
+    # Frequent OPEL transitions (system instability)
+    ClinicalThreshold(
+        metric="opel_transitions",
+        threshold=6.0,
+        operator="gt",
+        severity=Severity.MEDIUM,
+        category=InsightCategory.CAPACITY,
+        title="OPEL Instability Detected",
+        message_template=(
+            "System had {value:.0f} OPEL level transitions during the period. "
+            "Frequent oscillation between levels indicates the system is "
+            "operating at a tipping point near threshold boundaries."
+        ),
+        recommendation=(
+            "Review OPEL threshold settings. Consider adding hysteresis "
+            "(different up/down thresholds) to reduce oscillation. Evaluate "
+            "if thresholds match operational reality."
+        ),
+    ),
 ]
 
 

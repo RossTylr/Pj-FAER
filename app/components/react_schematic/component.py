@@ -68,3 +68,19 @@ def react_schematic(
         key=key,
         default=None,
     )
+
+
+def mini_schematic_svg(data) -> str:
+    """Render mini schematic as inline SVG.
+
+    This is a simpler fallback that doesn't require the React component
+    to be built. Always available.
+
+    Args:
+        data: MiniSchematicData object
+
+    Returns:
+        SVG string for inline rendering with st.markdown(svg, unsafe_allow_html=True)
+    """
+    from .data import render_mini_schematic_svg
+    return render_mini_schematic_svg(data)

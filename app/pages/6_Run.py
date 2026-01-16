@@ -481,13 +481,28 @@ with tab_scaling:
                 'Level': ['OPEL 2', 'OPEL 3', 'OPEL 4'],
                 'ED Trigger': [f"{opel.opel_2_ed_threshold:.0%}", f"{opel.opel_3_ed_threshold:.0%}", f"{opel.opel_4_ed_threshold:.0%}"],
                 'Ward Trigger': [f"{opel.opel_2_ward_threshold:.0%}", f"{opel.opel_3_ward_threshold:.0%}", f"{opel.opel_4_ward_threshold:.0%}"],
-                'Actions': [
-                    'Monitor',
-                    f'+{opel.opel_3_surge_beds} beds, {opel.opel_3_los_reduction_pct:.0f}% LoS',
-                    f'+{opel.opel_4_surge_beds} beds, {opel.opel_4_los_reduction_pct:.0f}% LoS, divert'
-                ]
+                'ITU Trigger': [f"{getattr(opel, 'opel_2_itu_threshold', 0.85):.0%}", f"{getattr(opel, 'opel_3_itu_threshold', 0.90):.0%}", f"{getattr(opel, 'opel_4_itu_threshold', 0.95):.0%}"],
             }
             st.dataframe(pd.DataFrame(opel_data), use_container_width=True, hide_index=True)
+
+            st.markdown("**OPEL Surge Capacity**")
+            # Get surge beds with backward compatibility
+            opel_3_ed = getattr(opel, 'opel_3_ed_surge_beds', getattr(opel, 'opel_3_surge_beds', 5))
+            opel_3_ward = getattr(opel, 'opel_3_ward_surge_beds', 3)
+            opel_3_itu = getattr(opel, 'opel_3_itu_surge_beds', 1)
+            opel_4_ed = getattr(opel, 'opel_4_ed_surge_beds', getattr(opel, 'opel_4_surge_beds', 10))
+            opel_4_ward = getattr(opel, 'opel_4_ward_surge_beds', 6)
+            opel_4_itu = getattr(opel, 'opel_4_itu_surge_beds', 2)
+
+            surge_data = {
+                'Level': ['OPEL 3', 'OPEL 4'],
+                'ED Surge': [f"+{opel_3_ed}", f"+{opel_4_ed}"],
+                'Ward Surge': [f"+{opel_3_ward}", f"+{opel_4_ward}"],
+                'ITU Surge': [f"+{opel_3_itu}", f"+{opel_4_itu}"],
+                'LoS Reduction': [f"{opel.opel_3_los_reduction_pct:.0f}%", f"{opel.opel_4_los_reduction_pct:.0f}%"],
+                'Other': ['Discharge lounge', 'Amb. diversion' if opel.opel_4_enable_divert else '-']
+            }
+            st.dataframe(pd.DataFrame(surge_data), use_container_width=True, hide_index=True)
 
         if scaling_config.rules:
             st.markdown("---")

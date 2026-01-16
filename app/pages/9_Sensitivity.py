@@ -1,4 +1,7 @@
-"""Sensitivity Analysis Page (Phase 6)."""
+"""Sensitivity Analysis Page (Phase 6).
+
+Enhanced with AI Agent insights and parameter-metric linkage.
+"""
 
 import streamlit as st
 import pandas as pd
@@ -6,9 +9,25 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from faer.core.scenario import FullScenario
+from faer.core.scenario import FullScenario, ITUConfig, WardConfig, TheatreConfig
+from faer.core.scaling import CapacityScalingConfig, OPELConfig
 from faer.experiment.analysis import sensitivity_sweep, find_breaking_point, identify_bottlenecks
+from faer.experiment.runner import multiple_replications
 from faer.model.full_model import run_full_simulation
+
+# AI Agent imports
+from faer.agents.interface import MetricsSummary, Severity
+from faer.agents.shadow import HeuristicShadowAgent
+from faer.agents.orchestrator import AgentOrchestrator, OrchestratorConfig
+from faer.agents.parameter_metrics import (
+    get_affected_metrics,
+    get_influencing_parameters,
+    get_parameter_guidance,
+    get_metric_info,
+    get_sweep_suggestions,
+    PARAMETER_GUIDANCE,
+    METRIC_INFO,
+)
 
 st.set_page_config(page_title="Sensitivity - FAER", page_icon="", layout="wide")
 
@@ -26,8 +45,8 @@ st.info("""
 # Mode selection
 mode = st.radio(
     "Analysis Type",
-    ["Sensitivity Sweep", "Find Breaking Point", "Bottleneck Analysis"],
-    help="Sweep: test a range of values. Breaking Point: find exact threshold. Bottleneck: identify constraints."
+    ["Sensitivity Sweep", "Find Breaking Point", "Bottleneck Analysis", "OPEL Optimization", "AI Agent Explainer"],
+    help="Sweep: test a range of values. Breaking Point: find exact threshold. Bottleneck: identify constraints. OPEL: optimize scaling thresholds. AI Agent: understand how insights are generated."
 )
 
 st.divider()
@@ -39,6 +58,123 @@ if "breaking_point_result" not in st.session_state:
     st.session_state.breaking_point_result = None
 if "bottleneck_result" not in st.session_state:
     st.session_state.bottleneck_result = None
+if "sweep_insights" not in st.session_state:
+    st.session_state.sweep_insights = None
+
+
+# ============ HELPER FUNCTION: RUN AI INSIGHTS ============
+def run_ai_insights(results_dict: dict, scenario_name: str = "Sensitivity Run") -> list:
+    """Run AI agent analysis on simulation results.
+
+    Args:
+        results_dict: Dict with metric names as keys and values (or lists)
+        scenario_name: Name for the scenario
+
+    Returns:
+        List of ClinicalInsight objects
+    """
+    # Convert to MetricsSummary format
+    # If results are single values, wrap in lists for from_run_results
+    wrapped_results = {}
+    for key, value in results_dict.items():
+        if isinstance(value, (int, float)):
+            wrapped_results[key] = [value]
+        else:
+            wrapped_results[key] = value
+
+    metrics = MetricsSummary.from_run_results(
+        wrapped_results,
+        scenario_name=scenario_name,
+        compute_confidence_intervals=True,
+    )
+
+    # Run the heuristic agent
+    agent = HeuristicShadowAgent()
+    insights = agent.analyze(metrics)
+
+    return insights
+
+
+def display_insights(insights: list, title: str = "AI Clinical Insights"):
+    """Display AI insights with proper formatting.
+
+    Args:
+        insights: List of ClinicalInsight objects
+        title: Section title
+    """
+    if not insights:
+        st.info("No clinical alerts triggered for these results.")
+        return
+
+    st.subheader(title)
+
+    # Count by severity
+    severity_counts = {}
+    for insight in insights:
+        sev = insight.severity.value
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+
+    # Summary badges
+    badge_cols = st.columns(5)
+    severity_colors = {
+        "CRITICAL": "red",
+        "HIGH": "orange",
+        "MEDIUM": "yellow",
+        "LOW": "blue",
+        "INFO": "gray",
+    }
+    severity_icons = {
+        "CRITICAL": "!!",
+        "HIGH": "!",
+        "MEDIUM": "~",
+        "LOW": "i",
+        "INFO": "-",
+    }
+
+    for i, sev in enumerate(["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]):
+        count = severity_counts.get(sev, 0)
+        with badge_cols[i]:
+            if count > 0:
+                st.metric(sev, count)
+            else:
+                st.metric(sev, "-")
+
+    st.divider()
+
+    # Display each insight
+    for insight in insights:
+        sev = insight.severity.value
+        icon = severity_icons.get(sev, "?")
+
+        # Determine container color based on severity
+        if sev == "CRITICAL":
+            st.error(f"**{icon} {insight.title}**")
+        elif sev == "HIGH":
+            st.warning(f"**{icon} {insight.title}**")
+        elif sev == "MEDIUM":
+            st.warning(f"**{icon} {insight.title}**")
+        else:
+            st.info(f"**{icon} {insight.title}**")
+
+        st.markdown(insight.message)
+
+        if insight.recommendation:
+            st.markdown(f"**Recommendation:** {insight.recommendation}")
+
+        # Show confidence info if available
+        if insight.uncertainty_note:
+            st.caption(insight.uncertainty_note)
+
+        # Show evidence metrics
+        if insight.evidence:
+            with st.expander("Evidence"):
+                evidence_df = pd.DataFrame([
+                    {"Metric": k, "Value": f"{v:.3f}" if isinstance(v, float) else str(v)}
+                    for k, v in insight.evidence.items()
+                ])
+                st.dataframe(evidence_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
 
 # ===== SENSITIVITY SWEEP =====
 if mode == "Sensitivity Sweep":
@@ -73,6 +209,17 @@ if mode == "Sensitivity Sweep":
         'ward_config.capacity': 'Ward Beds',
         # Aeromed
         'aeromed_config.hems.slots_per_day': 'HEMS Slots/Day',
+        # Capacity Scaling (Phase 12)
+        'capacity_scaling.opel_config.opel_3_ed_threshold': 'OPEL 3 ED Trigger',
+        'capacity_scaling.opel_config.opel_3_ed_surge_beds': 'OPEL 3 ED Surge Beds',
+        'capacity_scaling.opel_config.opel_3_ward_surge_beds': 'OPEL 3 Ward Surge Beds',
+        'capacity_scaling.opel_config.opel_3_itu_surge_beds': 'OPEL 3 ITU Surge Beds',
+        'capacity_scaling.opel_config.opel_4_ed_threshold': 'OPEL 4 ED Trigger',
+        'capacity_scaling.opel_config.opel_4_ed_surge_beds': 'OPEL 4 ED Surge Beds',
+        'capacity_scaling.opel_config.opel_4_ward_surge_beds': 'OPEL 4 Ward Surge Beds',
+        'capacity_scaling.opel_config.opel_4_itu_surge_beds': 'OPEL 4 ITU Surge Beds',
+        'capacity_scaling.opel_config.opel_3_los_reduction_pct': 'Discharge Acceleration %',
+        'capacity_scaling.discharge_lounge_capacity': 'Discharge Lounge Capacity',
     }
 
     param = st.selectbox(
@@ -80,6 +227,44 @@ if mode == "Sensitivity Sweep":
         options=list(param_options.keys()),
         format_func=lambda x: param_options[x]
     )
+
+    # === PARAMETER INTELLIGENCE PANEL ===
+    # Show guidance for selected parameter
+    guidance = get_parameter_guidance(param)
+    if guidance:
+        with st.expander("Parameter Intelligence (AI-Powered)", expanded=True):
+            st.markdown(f"**{guidance.display_name}**: {guidance.description}")
+
+            if guidance.clinical_context:
+                st.markdown(f"*Clinical Context*: {guidance.clinical_context}")
+
+            # Show affected metrics
+            if guidance.primary_metrics:
+                st.markdown("**Primary metrics affected:**")
+                for effect in guidance.affected_metrics:
+                    if effect.metric in guidance.primary_metrics:
+                        direction_icon = "+" if effect.direction.value == "increase" else "-" if effect.direction.value == "decrease" else "~"
+                        mag_label = f"({effect.magnitude.value})"
+                        metric_info = get_metric_info(effect.metric)
+                        display_name = metric_info.display_name if metric_info else effect.metric
+                        st.markdown(f"- **{display_name}** {direction_icon} {mag_label}: {effect.explanation}")
+
+            # Show interaction notes
+            if guidance.interaction_notes:
+                st.markdown("**Watch out for:**")
+                for note in guidance.interaction_notes:
+                    st.markdown(f"- {note}")
+
+            # Recommended range
+            st.markdown(f"**Recommended sweep range**: {guidance.typical_range[0]} - {guidance.typical_range[1]}")
+            if guidance.diminishing_returns_threshold:
+                st.markdown(f"**Diminishing returns above**: {guidance.diminishing_returns_threshold}")
+    else:
+        # Fallback for parameters without detailed guidance
+        with st.expander("Parameter Info"):
+            st.markdown(f"No detailed guidance available for `{param}`. Consider testing with the suggested defaults.")
+
+    st.divider()
 
     # Value range based on parameter type
     col1, col2, col3 = st.columns(3)
@@ -103,10 +288,26 @@ if mode == "Sensitivity Sweep":
         'ward_config.capacity': (15, 50, 10, 100),
         # Aeromed
         'aeromed_config.hems.slots_per_day': (2, 10, 0, 20),
+        # Capacity Scaling (Phase 12)
+        'capacity_scaling.opel_config.opel_3_ed_threshold': (0.80, 0.95, 0.70, 1.0),
+        'capacity_scaling.opel_config.opel_3_ed_surge_beds': (2, 10, 0, 20),
+        'capacity_scaling.opel_config.opel_3_ward_surge_beds': (1, 6, 0, 15),
+        'capacity_scaling.opel_config.opel_3_itu_surge_beds': (0, 3, 0, 6),
+        'capacity_scaling.opel_config.opel_4_ed_threshold': (0.90, 1.0, 0.80, 1.0),
+        'capacity_scaling.opel_config.opel_4_ed_surge_beds': (5, 15, 0, 30),
+        'capacity_scaling.opel_config.opel_4_ward_surge_beds': (3, 10, 0, 20),
+        'capacity_scaling.opel_config.opel_4_itu_surge_beds': (1, 4, 0, 10),
+        'capacity_scaling.opel_config.opel_3_los_reduction_pct': (5.0, 20.0, 0.0, 30.0),
+        'capacity_scaling.discharge_lounge_capacity': (5, 15, 0, 30),
     }
 
     defaults = param_defaults.get(param, (1, 10, 1, 50))
-    is_float_param = param in ['demand_multiplier', 'p_resus', 'p_majors']
+    is_float_param = param in [
+        'demand_multiplier', 'p_resus', 'p_majors',
+        'capacity_scaling.opel_config.opel_3_ed_threshold',
+        'capacity_scaling.opel_config.opel_4_ed_threshold',
+        'capacity_scaling.opel_config.opel_3_los_reduction_pct',
+    ]
 
     with col1:
         if is_float_param:
@@ -152,6 +353,14 @@ if mode == "Sensitivity Sweep":
         'aeromed_total': 'Total Aeromed Evacuations',
         'aeromed_slots_missed': 'Aeromed Slots Missed',
         'mean_aeromed_slot_wait': 'Mean Aeromed Slot Wait',
+        # Capacity Scaling (Phase 12)
+        'opel_peak_level': 'Peak OPEL Level',
+        'opel_transitions': 'OPEL Transitions',
+        'pct_time_at_surge': '% Time at Surge Capacity',
+        'total_additional_bed_hours': 'Additional Surge Bed-Hours',
+        'patients_diverted': 'Patients Diverted',
+        'scale_up_events': 'Scale-Up Events',
+        'scale_down_events': 'Scale-Down Events',
     }
 
     metric = st.selectbox(
@@ -409,7 +618,7 @@ elif mode == "Find Breaking Point":
 
 
 # ===== BOTTLENECK ANALYSIS =====
-else:  # Bottleneck Analysis
+elif mode == "Bottleneck Analysis":
     st.header("Bottleneck Analysis")
 
     st.markdown("""
@@ -456,8 +665,6 @@ else:  # Bottleneck Analysis
 
     if st.button("Analyse Bottlenecks", type="primary", use_container_width=True):
         with st.spinner("Running simulation and analysing bottlenecks..."):
-            from faer.core.scenario import ITUConfig, WardConfig, TheatreConfig
-
             scenario = FullScenario(
                 run_length=run_hours * 60.0,
                 warm_up=60.0,
@@ -533,3 +740,415 @@ else:  # Bottleneck Analysis
         2. ED bays full → Handover delays → Ambulance queues
         3. Triage constrained → Front door delays
         """)
+
+        # OPEL-based recommendations
+        if result.primary_bottleneck in ['ed_bays', 'ward_beds']:
+            util_level = dict(result.utilisation_ranking).get(result.primary_bottleneck, 0)
+            if util_level > 0.85:
+                st.markdown("""
+                ### OPEL-Based Response Options
+
+                **At this utilisation level, OPEL escalation would typically trigger:**
+
+                **OPEL 3 (Severe Pressure) - 85-90% utilisation:**
+                - Activate surge capacity (+5 beds)
+                - Enable discharge acceleration (10% LoS reduction)
+                - Open discharge lounge to free beds faster
+                - Focus on flow initiatives
+
+                **OPEL 4 (Critical) - >90% utilisation:**
+                - Full surge capacity (+10 beds)
+                - Aggressive discharge acceleration (15% LoS reduction)
+                - Consider ambulance diversion for P3/P4 patients
+                - Escalate to system-level response
+
+                *Enable Capacity Scaling in the Compare page to simulate these responses.*
+                """)
+
+
+# ===== OPEL OPTIMIZATION =====
+elif mode == "OPEL Optimization":
+    st.header("OPEL Threshold Optimization")
+
+    st.markdown("""
+    **Find optimal OPEL trigger thresholds** that balance:
+    - Patient flow (minimize delays)
+    - Resource efficiency (minimize surge capacity usage)
+    - Safety (avoid reaching OPEL 4)
+
+    This runs a grid search over OPEL threshold combinations and shows
+    how different settings affect key metrics.
+    """)
+
+    # Initialize session state
+    if "opel_optimization_results" not in st.session_state:
+        st.session_state.opel_optimization_results = None
+
+    # Base scenario configuration
+    st.subheader("Base Scenario")
+
+    with st.expander("Resource Configuration", expanded=True):
+        opel_col1, opel_col2 = st.columns(2)
+        with opel_col1:
+            opel_n_ed = st.number_input("ED Bays", 10, 50, 20, key="opel_ed")
+            opel_n_triage = st.number_input("Triage Clinicians", 1, 10, 3, key="opel_triage")
+            opel_n_ward = st.number_input("Ward Beds", 10, 100, 30, key="opel_ward")
+        with opel_col2:
+            opel_demand = st.slider("Demand Multiplier", 0.5, 3.0, 1.5, 0.1, key="opel_demand")
+            opel_run_hours = st.slider("Run Length (hours)", 4, 24, 8, key="opel_run_hours")
+            opel_n_reps = st.slider("Replications per combo", 3, 15, 5, key="opel_reps")
+
+    # Optimization grid settings
+    st.subheader("OPEL Threshold Grid")
+
+    grid_col1, grid_col2 = st.columns(2)
+    with grid_col1:
+        st.markdown("**OPEL 3 Thresholds to Test**")
+        opel_3_min = st.slider("Min", 0.75, 0.90, 0.80, 0.05, key="opel3_min")
+        opel_3_max = st.slider("Max", 0.85, 0.95, 0.95, 0.05, key="opel3_max")
+    with grid_col2:
+        st.markdown("**OPEL 4 Thresholds to Test**")
+        opel_4_min = st.slider("Min", 0.85, 0.95, 0.90, 0.05, key="opel4_min")
+        opel_4_max = st.slider("Max", 0.90, 1.00, 1.00, 0.05, key="opel4_max")
+
+    # Metric to optimize
+    opel_metric = st.selectbox(
+        "Primary Metric to Optimize",
+        ['mean_system_time', 'pct_time_at_surge', 'patients_diverted', 'opel_peak_level'],
+        format_func=lambda x: {
+            'mean_system_time': 'Mean System Time (minimize)',
+            'pct_time_at_surge': '% Time at Surge (minimize)',
+            'patients_diverted': 'Patients Diverted (minimize)',
+            'opel_peak_level': 'Peak OPEL Level (minimize)',
+        }.get(x, x)
+    )
+
+    if st.button("Run OPEL Optimization", type="primary", use_container_width=True):
+        # Generate threshold combinations
+        opel_3_thresholds = np.arange(opel_3_min, opel_3_max + 0.01, 0.05)
+        opel_4_thresholds = np.arange(opel_4_min, opel_4_max + 0.01, 0.05)
+
+        valid_combinations = [
+            (t3, t4) for t3 in opel_3_thresholds for t4 in opel_4_thresholds if t4 > t3
+        ]
+
+        total_runs = len(valid_combinations) * opel_n_reps
+        st.info(f"Running {len(valid_combinations)} threshold combinations × {opel_n_reps} reps = {total_runs} simulations")
+
+        results_data = []
+        progress_bar = st.progress(0)
+
+        for i, (t3, t4) in enumerate(valid_combinations):
+            # Create scenario with this OPEL configuration
+            scenario = FullScenario(
+                run_length=opel_run_hours * 60.0,
+                warm_up=60.0,
+                n_ed_bays=opel_n_ed,
+                n_triage=opel_n_triage,
+                demand_multiplier=opel_demand,
+                downstream_enabled=True,
+                ward_config=WardConfig(capacity=opel_n_ward),
+                capacity_scaling=CapacityScalingConfig(
+                    enabled=True,
+                    opel_config=OPELConfig(
+                        enabled=True,
+                        opel_3_ed_threshold=t3,
+                        opel_3_ward_threshold=t3,
+                        opel_3_itu_threshold=t3,
+                        opel_3_ed_surge_beds=5,
+                        opel_3_ward_surge_beds=3,
+                        opel_3_itu_surge_beds=1,
+                        opel_3_los_reduction_pct=10.0,
+                        opel_4_ed_threshold=t4,
+                        opel_4_ward_threshold=t4,
+                        opel_4_itu_threshold=t4,
+                        opel_4_ed_surge_beds=10,
+                        opel_4_ward_surge_beds=6,
+                        opel_4_itu_surge_beds=2,
+                        opel_4_enable_divert=True,
+                    ),
+                    discharge_lounge_capacity=10,
+                ),
+            )
+
+            # Run replications
+            metrics_to_collect = [
+                'mean_system_time', 'pct_time_at_surge', 'patients_diverted',
+                'opel_peak_level', 'scale_up_events', 'util_ed_bays'
+            ]
+
+            try:
+                rep_results = multiple_replications(scenario, opel_n_reps, metrics_to_collect)
+
+                results_data.append({
+                    'opel_3_threshold': t3,
+                    'opel_4_threshold': t4,
+                    'mean_system_time': np.mean(rep_results.get('mean_system_time', [0])),
+                    'pct_time_at_surge': np.mean(rep_results.get('pct_time_at_surge', [0])),
+                    'patients_diverted': np.mean(rep_results.get('patients_diverted', [0])),
+                    'opel_peak_level': np.mean(rep_results.get('opel_peak_level', [1])),
+                    'scale_up_events': np.mean(rep_results.get('scale_up_events', [0])),
+                    'util_ed_bays': np.mean(rep_results.get('util_ed_bays', [0])),
+                })
+            except Exception as e:
+                st.warning(f"Error running combination ({t3:.2f}, {t4:.2f}): {e}")
+
+            progress_bar.progress((i + 1) / len(valid_combinations))
+
+        st.session_state.opel_optimization_results = pd.DataFrame(results_data)
+        st.success("Optimization complete!")
+
+    # Display results
+    if st.session_state.opel_optimization_results is not None:
+        df = st.session_state.opel_optimization_results
+
+        st.subheader("Results")
+
+        # Heatmap
+        st.markdown("### Heatmap: OPEL Thresholds vs " + opel_metric.replace('_', ' ').title())
+
+        # Pivot for heatmap
+        pivot_df = df.pivot(index='opel_4_threshold', columns='opel_3_threshold', values=opel_metric)
+
+        fig = px.imshow(
+            pivot_df,
+            x=pivot_df.columns,
+            y=pivot_df.index,
+            color_continuous_scale='RdYlGn_r',  # Red=high (bad), Green=low (good)
+            labels={'x': 'OPEL 3 Threshold', 'y': 'OPEL 4 Threshold', 'color': opel_metric},
+            title=f"Effect of OPEL Thresholds on {opel_metric.replace('_', ' ').title()}"
+        )
+        fig.update_layout(
+            xaxis_title="OPEL 3 Threshold",
+            yaxis_title="OPEL 4 Threshold"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Find optimal combination
+        optimal_idx = df[opel_metric].idxmin()
+        optimal = df.loc[optimal_idx]
+
+        st.markdown(f"""
+        ### Optimal Configuration
+
+        **Best OPEL 3 Threshold**: {optimal['opel_3_threshold']:.0%}
+        **Best OPEL 4 Threshold**: {optimal['opel_4_threshold']:.0%}
+
+        At these settings:
+        - Mean System Time: {optimal['mean_system_time']:.1f} minutes
+        - % Time at Surge: {optimal['pct_time_at_surge']:.1f}%
+        - Patients Diverted: {optimal['patients_diverted']:.1f}
+        - Peak OPEL Level: {optimal['opel_peak_level']:.1f}
+        """)
+
+        # Full results table
+        with st.expander("View All Results"):
+            st.dataframe(df.round(3), use_container_width=True)
+
+# ===== AI AGENT EXPLAINER =====
+elif mode == "AI Agent Explainer":
+    st.header("AI Agent Explainer")
+
+    st.info("""
+    **How FAER's AI Clinical Agent Works**
+
+    The AI agent analyzes simulation results and generates clinical insights
+    based on NHS standards, clinical guidelines, and queuing theory principles.
+    This page explains how insights are generated and how to interpret them.
+    """)
+
+    # Overview
+    st.subheader("Agent Architecture")
+
+    st.markdown("""
+    The **Heuristic Shadow Agent** applies rule-based clinical thresholds to simulation metrics.
+    It serves as a deterministic, testable baseline that can later be augmented with LLM-based analysis.
+
+    **Key Features:**
+    - **Single-metric thresholds**: NHS standards (4-hour wait, handover targets)
+    - **Compound rules**: Multi-metric risk patterns (e.g., high acuity + long waits)
+    - **Uncertainty-aware**: Considers confidence intervals when alerting
+    - **Expert perspectives**: EM consultant, anaesthetist, surgeon, paramedic viewpoints
+    """)
+
+    st.divider()
+
+    # Threshold Rules Explanation
+    st.subheader("Clinical Threshold Rules")
+
+    st.markdown("""
+    The agent monitors these key metrics against clinical thresholds:
+    """)
+
+    # Import threshold rules from shadow agent
+    from faer.agents.shadow import NHS_THRESHOLDS
+
+    threshold_data = []
+    for rule in NHS_THRESHOLDS:
+        threshold_data.append({
+            "Metric": rule.metric,
+            "Threshold": f"{rule.threshold:.2f}" if rule.threshold < 10 else f"{rule.threshold:.0f}",
+            "Operator": rule.operator,
+            "Severity": rule.severity.value,
+            "Title": rule.title,
+        })
+
+    threshold_df = pd.DataFrame(threshold_data)
+    st.dataframe(threshold_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Parameter-Metric Relationships
+    st.subheader("Parameter-Metric Relationships")
+
+    st.markdown("""
+    Understanding which parameters affect which metrics helps you design effective experiments.
+    Select a metric to see which parameters influence it most:
+    """)
+
+    # Metric selector
+    selected_metric = st.selectbox(
+        "Select a metric to investigate",
+        options=list(METRIC_INFO.keys()),
+        format_func=lambda x: METRIC_INFO.get(x).display_name if x in METRIC_INFO else x
+    )
+
+    metric_info = get_metric_info(selected_metric)
+    if metric_info:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown(f"**{metric_info.display_name}**")
+            st.markdown(metric_info.description)
+            st.markdown(f"*Unit*: {metric_info.unit}")
+            st.markdown(f"*Good direction*: {metric_info.good_direction}")
+
+            if metric_info.nhs_target:
+                st.markdown(f"*NHS Target*: {metric_info.nhs_target}")
+
+            if metric_info.warning_threshold:
+                st.markdown(f"*Warning at*: {metric_info.warning_threshold}")
+            if metric_info.critical_threshold:
+                st.markdown(f"*Critical at*: {metric_info.critical_threshold}")
+
+        with col2:
+            st.markdown("**Influenced by these parameters:**")
+            influencers = get_influencing_parameters(selected_metric)
+            if influencers:
+                for param in influencers[:5]:  # Top 5
+                    guidance = get_parameter_guidance(param)
+                    if guidance:
+                        # Find the effect for this metric
+                        for effect in guidance.affected_metrics:
+                            if effect.metric == selected_metric:
+                                direction = "increases" if effect.direction.value == "increase" else "decreases"
+                                st.markdown(f"- **{guidance.display_name}**: {direction} it ({effect.magnitude.value})")
+                                break
+            else:
+                st.markdown("No parameter guidance available for this metric.")
+
+    st.divider()
+
+    # Interactive Demo
+    st.subheader("Try the Agent")
+
+    st.markdown("""
+    Enter hypothetical metric values to see what insights the agent would generate:
+    """)
+
+    demo_col1, demo_col2, demo_col3 = st.columns(3)
+
+    with demo_col1:
+        demo_p_delay = st.slider("P(Delay)", 0.0, 1.0, 0.3, 0.05, key="demo_p_delay")
+        demo_treatment_wait = st.slider("Mean Treatment Wait (min)", 0, 300, 45, 5, key="demo_treatment_wait")
+        demo_p95_wait = st.slider("P95 Treatment Wait (min)", 0, 400, 120, 10, key="demo_p95_wait")
+
+    with demo_col2:
+        demo_util_ed = st.slider("ED Bay Utilisation", 0.0, 1.0, 0.75, 0.05, key="demo_util_ed")
+        demo_util_itu = st.slider("ITU Utilisation", 0.0, 1.0, 0.60, 0.05, key="demo_util_itu")
+        demo_util_ward = st.slider("Ward Utilisation", 0.0, 1.0, 0.85, 0.05, key="demo_util_ward")
+
+    with demo_col3:
+        demo_handover = st.slider("Mean Handover Delay (min)", 0, 60, 10, 2, key="demo_handover")
+        demo_boarding = st.slider("Mean Boarding Time (min)", 0, 120, 20, 5, key="demo_boarding")
+        demo_opel = st.slider("Peak OPEL Level", 1, 4, 2, 1, key="demo_opel")
+
+    if st.button("Run Agent Analysis", type="primary", use_container_width=True):
+        # Build demo metrics
+        demo_results = {
+            "p_delay": demo_p_delay,
+            "mean_treatment_wait": demo_treatment_wait,
+            "p95_treatment_wait": demo_p95_wait,
+            "util_ed_bays": demo_util_ed,
+            "util_itu": demo_util_itu,
+            "util_ward": demo_util_ward,
+            "util_triage": 0.5,  # Defaults
+            "util_theatre": 0.6,
+            "mean_handover_delay": demo_handover,
+            "max_handover_delay": demo_handover * 2,
+            "mean_boarding_time": demo_boarding,
+            "opel_peak_level": demo_opel,
+            "arrivals": 100,
+            "mean_triage_wait": 5,
+            "mean_system_time": 180,
+            "p95_system_time": 280,
+            "mean_itu_wait": 30,
+            "mean_ward_wait": 45,
+            "mean_theatre_wait": 60,
+            "p_boarding": 0.3,
+            "aeromed_total": 5,
+            "aeromed_slots_missed": 0,
+        }
+
+        with st.spinner("Running AI analysis..."):
+            insights = run_ai_insights(demo_results, "Demo Scenario")
+
+        display_insights(insights, "Generated Insights")
+
+    st.divider()
+
+    # Expert Perspectives
+    st.subheader("Expert Perspectives")
+
+    st.markdown("""
+    The agent provides analysis from multiple clinical viewpoints:
+
+    | Expert | Focus Area | Key Metrics |
+    |--------|------------|-------------|
+    | **EM Consultant** | Triage priorities, ED flow, 4-hour standard | P95 wait, P(delay), boarding |
+    | **Anaesthetist** | ITU pathways, P1 stabilisation, critical care | ITU utilisation, ITU wait |
+    | **Surgeon** | Theatre capacity, trauma cases, time-critical procedures | Theatre utilisation, theatre wait |
+    | **CBRN Specialist** | Decontamination, MCI surge, contamination protocols | ED capacity, surge headroom |
+    | **Data Scientist** | Statistical confidence, CI interpretation | Replication count, CI widths |
+    | **Paramedic** | Ambulance turnaround, handover delays, bolus patterns | Handover delay, arrival patterns |
+    """)
+
+    st.divider()
+
+    # How to Use Insights
+    st.subheader("Interpreting Insights")
+
+    st.markdown("""
+    **Severity Levels:**
+
+    | Level | Meaning | Action |
+    |-------|---------|--------|
+    | **CRITICAL** | Immediate patient safety risk | Stop, review, escalate |
+    | **HIGH** | Urgent attention needed | Address within 1-2 hours |
+    | **MEDIUM** | Monitor closely | Review in daily huddle |
+    | **LOW** | Awareness item | Note for planning |
+    | **INFO** | Informational | No action needed |
+
+    **Confidence Levels:**
+
+    - **High confidence**: Threshold clearly breached, CI doesn't overlap
+    - **Medium confidence**: Threshold breached but CI is close
+    - **Low confidence**: Uncertain - more replications recommended
+
+    **Best Practices:**
+    1. Run 20+ replications for reliable insights
+    2. Focus on CRITICAL and HIGH severity first
+    3. Check the evidence section to understand what triggered the alert
+    4. Use recommendations as starting points, not prescriptions
+    5. Consider compound rules - they catch patterns single metrics miss
+    """)

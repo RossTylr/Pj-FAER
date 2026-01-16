@@ -1266,3 +1266,353 @@ def render_utilisation_schematic_svg(data: UtilisationSchematicData) -> str:
     svg_parts.append("</svg>")
 
     return "".join(svg_parts)
+
+
+# ============== MINI SCHEMATIC (Phase 12) ==============
+
+@dataclass
+class MiniSchematicData:
+    """Compact schematic data for side-by-side comparison views.
+
+    Used in Compare page to show two scenario configurations at a glance.
+    """
+
+    label: str  # "Scenario A" or "Scenario B"
+
+    # Core capacities
+    n_triage: int
+    n_ed_bays: int
+    n_theatre: int
+    n_itu: int
+    n_ward: int
+
+    # Arrivals (ambulance/helicopter)
+    n_ambulances: int = 10
+    n_helicopters: int = 2
+
+    # Diagnostics
+    n_ct: int = 2
+    n_xray: int = 3
+    n_bloods: int = 5
+
+    # Aeromed slots
+    hems_slots_per_day: int = 6
+    fixedwing_slots_per_day: int = 1
+    aeromed_enabled: bool = False
+
+    # Scaling status
+    scaling_enabled: bool = False
+    opel_enabled: bool = False
+    opel_3_threshold: float = 0.90
+    opel_4_threshold: float = 0.95
+    surge_beds: int = 0
+
+    # Optional: post-simulation utilisation
+    util_ed: Optional[float] = None
+    util_itu: Optional[float] = None
+    util_ward: Optional[float] = None
+
+    @property
+    def opel_status_text(self) -> str:
+        """Get OPEL status text for display."""
+        if not self.scaling_enabled:
+            return "OPEL: Disabled"
+        if not self.opel_enabled:
+            return "Scaling: Custom Rules"
+        return f"OPEL 3 @ {self.opel_3_threshold:.0%}, +{self.surge_beds} surge"
+
+
+def build_mini_schematic_data(
+    label: str,
+    scenario: Any = None,
+    session_state: Dict[str, Any] = None,
+) -> MiniSchematicData:
+    """Build mini schematic data from scenario or session state.
+
+    Args:
+        label: Display label (e.g., "Scenario A")
+        scenario: Optional FullScenario object
+        session_state: Optional Streamlit session state dict
+
+    Returns:
+        MiniSchematicData for rendering
+    """
+    if scenario is not None:
+        # Extract from scenario object
+        n_triage = getattr(scenario, "n_triage", 3)
+        n_ed_bays = getattr(scenario, "n_ed_bays", 20)
+
+        n_theatre = 2
+        if hasattr(scenario, "theatre_config") and scenario.theatre_config:
+            n_theatre = getattr(scenario.theatre_config, "n_tables", 2)
+
+        n_itu = 6
+        if hasattr(scenario, "itu_config") and scenario.itu_config:
+            n_itu = getattr(scenario.itu_config, "capacity", 6)
+
+        n_ward = 30
+        if hasattr(scenario, "ward_config") and scenario.ward_config:
+            n_ward = getattr(scenario.ward_config, "capacity", 30)
+
+        # Scaling config
+        scaling_enabled = False
+        opel_enabled = False
+        opel_3_threshold = 0.90
+        opel_4_threshold = 0.95
+        surge_beds = 0
+
+        if hasattr(scenario, "capacity_scaling") and scenario.capacity_scaling:
+            scaling_enabled = getattr(scenario.capacity_scaling, "enabled", False)
+            if scaling_enabled and hasattr(scenario.capacity_scaling, "opel_config"):
+                opel_config = scenario.capacity_scaling.opel_config
+                opel_enabled = getattr(opel_config, "enabled", False)
+                opel_3_threshold = getattr(opel_config, "opel_3_ed_threshold", 0.90)
+                opel_4_threshold = getattr(opel_config, "opel_4_ed_threshold", 0.95)
+                surge_beds = getattr(opel_config, "opel_3_surge_beds", 0)
+
+        return MiniSchematicData(
+            label=label,
+            n_triage=n_triage,
+            n_ed_bays=n_ed_bays,
+            n_theatre=n_theatre,
+            n_itu=n_itu,
+            n_ward=n_ward,
+            scaling_enabled=scaling_enabled,
+            opel_enabled=opel_enabled,
+            opel_3_threshold=opel_3_threshold,
+            opel_4_threshold=opel_4_threshold,
+            surge_beds=surge_beds,
+        )
+
+    elif session_state is not None:
+        # Extract from session state (for pre-run configuration display)
+        return MiniSchematicData(
+            label=label,
+            n_triage=session_state.get("n_triage", 3),
+            n_ed_bays=session_state.get("n_ed_bays", 20),
+            n_theatre=session_state.get("n_theatre_tables", 2),
+            n_itu=session_state.get("n_itu_beds", 6),
+            n_ward=session_state.get("n_ward_beds", 30),
+            scaling_enabled=session_state.get("scaling_enabled", False),
+            opel_enabled=session_state.get("opel_enabled", False),
+            opel_3_threshold=session_state.get("opel_3_threshold", 90) / 100.0,
+            opel_4_threshold=session_state.get("opel_4_threshold", 95) / 100.0,
+            surge_beds=session_state.get("opel_3_surge", 5),
+        )
+
+    else:
+        # Return defaults
+        return MiniSchematicData(label=label, n_triage=3, n_ed_bays=20, n_theatre=2, n_itu=6, n_ward=30)
+
+
+def render_mini_schematic_svg(data: MiniSchematicData) -> str:
+    """Render compact SVG schematic for comparison view.
+
+    Creates a simplified crucifix layout showing key capacities,
+    arrivals, diagnostics, aeromed, and OPEL status.
+
+    Args:
+        data: MiniSchematicData with configuration
+
+    Returns:
+        SVG string for inline rendering
+    """
+    VIEWBOX_WIDTH = 400
+    VIEWBOX_HEIGHT = 220  # Taller to fit diagnostics row
+
+    # Node dimensions
+    NODE_W = 55
+    NODE_H = 32
+    SMALL_W = 42
+    SMALL_H = 26
+
+    # Main flow Y position (shifted up slightly to make room for diagnostics)
+    MAIN_Y = 75
+
+    # Node positions (centered crucifix layout)
+    positions = {
+        "arrivals": (35, MAIN_Y),
+        "triage": (100, MAIN_Y),
+        "ed_bays": (170, MAIN_Y),
+        "theatre": (240, MAIN_Y),
+        "discharge": (315, MAIN_Y),
+        "itu": (170, MAIN_Y - 50),
+        "ward": (170, MAIN_Y + 50),
+    }
+
+    # Diagnostics row positions (bottom)
+    DIAG_Y = 185
+    diag_positions = {
+        "ct": (100, DIAG_Y),
+        "xray": (170, DIAG_Y),
+        "bloods": (240, DIAG_Y),
+    }
+
+    # Node data for main flow
+    nodes = {
+        "arrivals": ("Arr", f"{data.n_ambulances}/{data.n_helicopters}", "entry"),
+        "triage": ("Tri", str(data.n_triage), "process"),
+        "ed_bays": ("ED", str(data.n_ed_bays), "resource"),
+        "theatre": ("Thtr", str(data.n_theatre), "resource"),
+        "discharge": ("Out", "→", "exit"),
+        "itu": ("ITU", str(data.n_itu), "resource"),
+        "ward": ("Ward", str(data.n_ward), "resource"),
+    }
+
+    # Diagnostics data
+    diagnostics = {
+        "ct": ("CT", str(data.n_ct)),
+        "xray": ("X-Ray", str(data.n_xray)),
+        "bloods": ("Bloods", str(data.n_bloods)),
+    }
+
+    def get_node_color(node_type: str, node_id: str) -> tuple:
+        """Get fill and stroke color for node type."""
+        if node_type == "entry":
+            return "#e3f2fd", "#1976d2"
+        elif node_type == "exit":
+            return "#f3e5f5", "#7b1fa2"
+        elif node_type == "process":
+            return "#f0fff4", "#28a745"
+        elif node_type == "diagnostic":
+            return "#fff3e0", "#ff9800"
+        else:  # resource
+            # Color by utilisation if available
+            util = None
+            if node_id == "ed_bays" and data.util_ed is not None:
+                util = data.util_ed
+            elif node_id == "itu" and data.util_itu is not None:
+                util = data.util_itu
+            elif node_id == "ward" and data.util_ward is not None:
+                util = data.util_ward
+
+            if util is not None:
+                if util >= 0.90:
+                    return "#fff5f5", "#dc3545"
+                elif util >= 0.70:
+                    return "#fffbf0", "#ffc107"
+            return "#f0fff4", "#28a745"
+
+    def render_node(node_id: str, x: int, y: int) -> str:
+        """Render a single mini node."""
+        label, value, node_type = nodes[node_id]
+        fill, stroke = get_node_color(node_type, node_id)
+
+        return f"""
+            <g transform="translate({x - NODE_W // 2}, {y - NODE_H // 2})">
+                <rect width="{NODE_W}" height="{NODE_H}" rx="6" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>
+                <text x="{NODE_W // 2}" y="13" text-anchor="middle" font-size="10" font-weight="bold" fill="#333">{label}</text>
+                <text x="{NODE_W // 2}" y="26" text-anchor="middle" font-size="12" fill="{stroke}">{value}</text>
+            </g>
+        """
+
+    def render_small_node(label: str, value: str, x: int, y: int, node_type: str = "diagnostic") -> str:
+        """Render a smaller diagnostic node."""
+        fill, stroke = get_node_color(node_type, "")
+
+        return f"""
+            <g transform="translate({x - SMALL_W // 2}, {y - SMALL_H // 2})">
+                <rect width="{SMALL_W}" height="{SMALL_H}" rx="4" fill="{fill}" stroke="{stroke}" stroke-width="1"/>
+                <text x="{SMALL_W // 2}" y="10" text-anchor="middle" font-size="8" font-weight="bold" fill="#333">{label}</text>
+                <text x="{SMALL_W // 2}" y="21" text-anchor="middle" font-size="10" fill="{stroke}">{value}</text>
+            </g>
+        """
+
+    def render_arrow(x1: int, y1: int, x2: int, y2: int) -> str:
+        """Render simple arrow."""
+        return f"""
+            <line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#adb5bd" stroke-width="1.5" marker-end="url(#mini-arrow)"/>
+        """
+
+    svg_parts = [
+        f"""<svg viewBox="0 0 {VIEWBOX_WIDTH} {VIEWBOX_HEIGHT}" width="100%" height="100%"
+            xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet"
+            style="font-family: system-ui, -apple-system, sans-serif; background: #fafafa; border-radius: 8px;">
+            <defs>
+                <marker id="mini-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+                    <path d="M0,0 L0,6 L8,3 z" fill="#adb5bd"/>
+                </marker>
+            </defs>
+        """
+    ]
+
+    # Title
+    svg_parts.append(f"""
+        <text x="10" y="16" font-size="11" font-weight="bold" fill="#333">{data.label}</text>
+    """)
+
+    # Aeromed slots badge (top right, before OPEL badge if present)
+    if data.aeromed_enabled:
+        svg_parts.append(f"""
+            <g transform="translate({VIEWBOX_WIDTH - 175}, 4)">
+                <rect width="78" height="16" rx="8" fill="#e1f5fe" stroke="#0288d1" stroke-width="0.5"/>
+                <text x="39" y="12" text-anchor="middle" font-size="8" fill="#0277bd">
+                    Aeromed {data.hems_slots_per_day}/{data.fixedwing_slots_per_day}
+                </text>
+            </g>
+        """)
+
+    # OPEL status badge (top right)
+    badge_x = VIEWBOX_WIDTH - 90
+    if data.scaling_enabled:
+        badge_color = "#28a745" if data.opel_enabled else "#6c757d"
+        badge_text = f"OPEL @ {data.opel_3_threshold:.0%}" if data.opel_enabled else "Custom Rules"
+        svg_parts.append(f"""
+            <g transform="translate({badge_x}, 4)">
+                <rect width="80" height="16" rx="8" fill="{badge_color}" fill-opacity="0.15" stroke="{badge_color}" stroke-width="0.5"/>
+                <text x="40" y="12" text-anchor="middle" font-size="9" fill="{badge_color}">{badge_text}</text>
+            </g>
+        """)
+    else:
+        svg_parts.append(f"""
+            <g transform="translate({badge_x}, 4)">
+                <rect width="80" height="16" rx="8" fill="#6c757d" fill-opacity="0.1"/>
+                <text x="40" y="12" text-anchor="middle" font-size="9" fill="#6c757d">No Scaling</text>
+            </g>
+        """)
+
+    # Arrows (main flow)
+    # Arrivals -> Triage
+    svg_parts.append(render_arrow(positions["arrivals"][0] + NODE_W // 2, positions["arrivals"][1],
+                                  positions["triage"][0] - NODE_W // 2, positions["triage"][1]))
+    # Triage -> ED
+    svg_parts.append(render_arrow(positions["triage"][0] + NODE_W // 2, positions["triage"][1],
+                                  positions["ed_bays"][0] - NODE_W // 2, positions["ed_bays"][1]))
+    # ED -> Theatre
+    svg_parts.append(render_arrow(positions["ed_bays"][0] + NODE_W // 2, positions["ed_bays"][1],
+                                  positions["theatre"][0] - NODE_W // 2, positions["theatre"][1]))
+    # Theatre -> Discharge
+    svg_parts.append(render_arrow(positions["theatre"][0] + NODE_W // 2, positions["theatre"][1],
+                                  positions["discharge"][0] - NODE_W // 2, positions["discharge"][1]))
+    # ED -> ITU (vertical up)
+    svg_parts.append(render_arrow(positions["ed_bays"][0], positions["ed_bays"][1] - NODE_H // 2,
+                                  positions["itu"][0], positions["itu"][1] + NODE_H // 2))
+    # ED -> Ward (vertical down)
+    svg_parts.append(render_arrow(positions["ed_bays"][0], positions["ed_bays"][1] + NODE_H // 2,
+                                  positions["ward"][0], positions["ward"][1] - NODE_H // 2))
+
+    # Main flow nodes
+    for node_id, (x, y) in positions.items():
+        svg_parts.append(render_node(node_id, x, y))
+
+    # Diagnostics row label
+    svg_parts.append(f"""
+        <text x="35" y="{DIAG_Y + 4}" font-size="9" fill="#666">Diag:</text>
+    """)
+
+    # Diagnostics nodes
+    for diag_id, (x, y) in diag_positions.items():
+        label, value = diagnostics[diag_id]
+        svg_parts.append(render_small_node(label, value, x, y))
+
+    # Surge capacity indicator (bottom left, if enabled)
+    if data.scaling_enabled and data.surge_beds > 0:
+        svg_parts.append(f"""
+            <text x="10" y="{VIEWBOX_HEIGHT - 8}" font-size="8" fill="#666">
+                Surge: +{data.surge_beds} beds @ OPEL 3
+            </text>
+        """)
+
+    svg_parts.append("</svg>")
+
+    return "".join(svg_parts)

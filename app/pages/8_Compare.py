@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -23,8 +24,31 @@ from faer.core.scenario import (
     AeromedConfig, HEMSConfig, FixedWingConfig,
 )
 from faer.core.entities import NodeType, DiagnosticType
+from faer.core.scaling import CapacityScalingConfig, OPELConfig
 from faer.experiment.comparison import compare_scenarios
 from components.scenario_summary import get_scenario_diff
+from components.react_schematic.data import MiniSchematicData, render_mini_schematic_svg
+
+
+def render_mini_svg(data: MiniSchematicData, unique_id: str = "a") -> None:
+    """Render mini schematic SVG using st.components.v1.html for proper display.
+
+    Args:
+        data: MiniSchematicData with configuration
+        unique_id: Unique identifier to avoid marker ID conflicts between instances
+    """
+    svg = render_mini_schematic_svg(data)
+    # Replace generic marker ID with unique one to avoid conflicts
+    svg = svg.replace('id="mini-arrow"', f'id="mini-arrow-{unique_id}"')
+    svg = svg.replace('url(#mini-arrow)', f'url(#mini-arrow-{unique_id})')
+
+    # Wrap in HTML with explicit dimensions (taller to fit diagnostics row)
+    html = f'''
+    <div style="width: 100%; height: 220px; background: #fafafa; border-radius: 8px;">
+        {svg}
+    </div>
+    '''
+    components.html(html, height=230)
 
 st.set_page_config(page_title="Compare - FAER", page_icon="", layout="wide")
 
@@ -42,11 +66,16 @@ if "compare_results" not in st.session_state:
     st.session_state.compare_results = None
 
 # ============ SCENARIO CONFIGURATION ============
+
+# We use containers to allow the mini schematics to update after config changes
+# First, create the main layout
 col_a, col_divider, col_b = st.columns([5, 1, 5])
 
 # ===== Scenario A (Baseline) =====
 with col_a:
     st.header("Scenario A (Baseline)")
+    # Placeholder for mini schematic (rendered after configs are collected)
+    schematic_placeholder_a = st.empty()
 
     with st.expander("Run Settings", expanded=True):
         a_run = st.selectbox(
@@ -90,6 +119,64 @@ with col_a:
         a_hems_slots = st.number_input("HEMS Slots/Day", 0, 12, 6, key="a_hems_slots")
         a_fixedwing_enabled = st.checkbox("Fixed-Wing Enabled", value=False, key="a_fixedwing_enabled")
 
+    with st.expander("Capacity Scaling"):
+        a_scaling_enabled = st.checkbox("Enable Capacity Scaling", value=False, key="a_scaling_enabled")
+        if a_scaling_enabled:
+            a_opel_enabled = st.checkbox("Use OPEL Framework", value=True, key="a_opel_enabled")
+            st.markdown("**OPEL 3 Thresholds**")
+            a_opel3_col1, a_opel3_col2, a_opel3_col3 = st.columns(3)
+            with a_opel3_col1:
+                a_opel_3_ed_threshold = st.slider("ED (%)", 80, 95, 90, key="a_opel3_ed_threshold")
+            with a_opel3_col2:
+                a_opel_3_ward_threshold = st.slider("Ward (%)", 80, 95, 90, key="a_opel3_ward_threshold")
+            with a_opel3_col3:
+                a_opel_3_itu_threshold = st.slider("ITU (%)", 80, 95, 90, key="a_opel3_itu_threshold")
+            st.markdown("**OPEL 3 Surge Capacity**")
+            a_surge3_col1, a_surge3_col2, a_surge3_col3 = st.columns(3)
+            with a_surge3_col1:
+                a_opel_3_ed_surge = st.number_input("ED", 0, 20, 5, key="a_opel3_ed_surge")
+            with a_surge3_col2:
+                a_opel_3_ward_surge = st.number_input("Ward", 0, 15, 3, key="a_opel3_ward_surge")
+            with a_surge3_col3:
+                a_opel_3_itu_surge = st.number_input("ITU", 0, 6, 1, key="a_opel3_itu_surge")
+            a_opel_3_los = st.slider("Discharge Acceleration (%)", 0, 30, 10, key="a_opel3_los")
+            st.markdown("**OPEL 4 Thresholds**")
+            a_opel4_col1, a_opel4_col2, a_opel4_col3 = st.columns(3)
+            with a_opel4_col1:
+                a_opel_4_ed_threshold = st.slider("ED (%)", 90, 100, 95, key="a_opel4_ed_threshold")
+            with a_opel4_col2:
+                a_opel_4_ward_threshold = st.slider("Ward (%)", 90, 100, 95, key="a_opel4_ward_threshold")
+            with a_opel4_col3:
+                a_opel_4_itu_threshold = st.slider("ITU (%)", 90, 100, 95, key="a_opel4_itu_threshold")
+            st.markdown("**OPEL 4 Surge Capacity**")
+            a_surge4_col1, a_surge4_col2, a_surge4_col3 = st.columns(3)
+            with a_surge4_col1:
+                a_opel_4_ed_surge = st.number_input("ED", 0, 30, 10, key="a_opel4_ed_surge")
+            with a_surge4_col2:
+                a_opel_4_ward_surge = st.number_input("Ward", 0, 20, 6, key="a_opel4_ward_surge")
+            with a_surge4_col3:
+                a_opel_4_itu_surge = st.number_input("ITU", 0, 10, 2, key="a_opel4_itu_surge")
+            a_opel_4_divert = st.checkbox("Enable Ambulance Diversion", value=True, key="a_opel4_divert")
+            st.markdown("**Discharge Lounge**")
+            a_lounge_capacity = st.number_input("Lounge Capacity", 0, 20, 10, key="a_lounge_capacity")
+        else:
+            a_opel_enabled = False
+            a_opel_3_ed_threshold = 90
+            a_opel_3_ward_threshold = 90
+            a_opel_3_itu_threshold = 90
+            a_opel_3_ed_surge = 5
+            a_opel_3_ward_surge = 3
+            a_opel_3_itu_surge = 1
+            a_opel_3_los = 10
+            a_opel_4_ed_threshold = 95
+            a_opel_4_ward_threshold = 95
+            a_opel_4_itu_threshold = 95
+            a_opel_4_ed_surge = 10
+            a_opel_4_ward_surge = 6
+            a_opel_4_itu_surge = 2
+            a_opel_4_divert = True
+            a_lounge_capacity = 10
+
 # ===== Divider =====
 with col_divider:
     st.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
@@ -98,6 +185,8 @@ with col_divider:
 # ===== Scenario B (Proposed) =====
 with col_b:
     st.header("Scenario B (Proposed)")
+    # Placeholder for mini schematic (rendered after configs are collected)
+    schematic_placeholder_b = st.empty()
 
     with st.expander("Run Settings", expanded=True):
         b_run = st.selectbox(
@@ -141,6 +230,125 @@ with col_b:
         b_hems_slots = st.number_input("HEMS Slots/Day", 0, 12, 6, key="b_hems_slots")
         b_fixedwing_enabled = st.checkbox("Fixed-Wing Enabled", value=False, key="b_fixedwing_enabled")
 
+    with st.expander("Capacity Scaling"):
+        b_scaling_enabled = st.checkbox("Enable Capacity Scaling", value=False, key="b_scaling_enabled")
+        if b_scaling_enabled:
+            b_opel_enabled = st.checkbox("Use OPEL Framework", value=True, key="b_opel_enabled")
+            st.markdown("**OPEL 3 Thresholds**")
+            b_opel3_col1, b_opel3_col2, b_opel3_col3 = st.columns(3)
+            with b_opel3_col1:
+                b_opel_3_ed_threshold = st.slider("ED (%)", 80, 95, 90, key="b_opel3_ed_threshold")
+            with b_opel3_col2:
+                b_opel_3_ward_threshold = st.slider("Ward (%)", 80, 95, 90, key="b_opel3_ward_threshold")
+            with b_opel3_col3:
+                b_opel_3_itu_threshold = st.slider("ITU (%)", 80, 95, 90, key="b_opel3_itu_threshold")
+            st.markdown("**OPEL 3 Surge Capacity**")
+            b_surge3_col1, b_surge3_col2, b_surge3_col3 = st.columns(3)
+            with b_surge3_col1:
+                b_opel_3_ed_surge = st.number_input("ED", 0, 20, 5, key="b_opel3_ed_surge")
+            with b_surge3_col2:
+                b_opel_3_ward_surge = st.number_input("Ward", 0, 15, 3, key="b_opel3_ward_surge")
+            with b_surge3_col3:
+                b_opel_3_itu_surge = st.number_input("ITU", 0, 6, 1, key="b_opel3_itu_surge")
+            b_opel_3_los = st.slider("Discharge Acceleration (%)", 0, 30, 10, key="b_opel3_los")
+            st.markdown("**OPEL 4 Thresholds**")
+            b_opel4_col1, b_opel4_col2, b_opel4_col3 = st.columns(3)
+            with b_opel4_col1:
+                b_opel_4_ed_threshold = st.slider("ED (%)", 90, 100, 95, key="b_opel4_ed_threshold")
+            with b_opel4_col2:
+                b_opel_4_ward_threshold = st.slider("Ward (%)", 90, 100, 95, key="b_opel4_ward_threshold")
+            with b_opel4_col3:
+                b_opel_4_itu_threshold = st.slider("ITU (%)", 90, 100, 95, key="b_opel4_itu_threshold")
+            st.markdown("**OPEL 4 Surge Capacity**")
+            b_surge4_col1, b_surge4_col2, b_surge4_col3 = st.columns(3)
+            with b_surge4_col1:
+                b_opel_4_ed_surge = st.number_input("ED", 0, 30, 10, key="b_opel4_ed_surge")
+            with b_surge4_col2:
+                b_opel_4_ward_surge = st.number_input("Ward", 0, 20, 6, key="b_opel4_ward_surge")
+            with b_surge4_col3:
+                b_opel_4_itu_surge = st.number_input("ITU", 0, 10, 2, key="b_opel4_itu_surge")
+            b_opel_4_divert = st.checkbox("Enable Ambulance Diversion", value=True, key="b_opel4_divert")
+            st.markdown("**Discharge Lounge**")
+            b_lounge_capacity = st.number_input("Lounge Capacity", 0, 20, 10, key="b_lounge_capacity")
+        else:
+            b_opel_enabled = False
+            b_opel_3_ed_threshold = 90
+            b_opel_3_ward_threshold = 90
+            b_opel_3_itu_threshold = 90
+            b_opel_3_ed_surge = 5
+            b_opel_3_ward_surge = 3
+            b_opel_3_itu_surge = 1
+            b_opel_3_los = 10
+            b_opel_4_ed_threshold = 95
+            b_opel_4_ward_threshold = 95
+            b_opel_4_itu_threshold = 95
+            b_opel_4_ed_surge = 10
+            b_opel_4_ward_surge = 6
+            b_opel_4_itu_surge = 2
+            b_opel_4_divert = True
+            b_lounge_capacity = 10
+
+# ============ RENDER MINI SCHEMATICS (in placeholders above configs) ============
+# Build mini schematic data for each scenario from collected config values
+mini_data_a = MiniSchematicData(
+    label="Scenario A (Baseline)",
+    n_triage=a_triage,
+    n_ed_bays=a_ed,
+    n_theatre=a_theatre,
+    n_itu=a_itu,
+    n_ward=a_ward,
+    # Arrivals
+    n_ambulances=a_amb,
+    n_helicopters=a_heli,
+    # Diagnostics
+    n_ct=a_ct,
+    n_xray=a_xray,
+    n_bloods=a_bloods,
+    # Aeromed
+    aeromed_enabled=a_aeromed_enabled,
+    hems_slots_per_day=a_hems_slots,
+    fixedwing_slots_per_day=1 if a_fixedwing_enabled else 0,
+    # Scaling (show ED threshold in schematic badge)
+    scaling_enabled=a_scaling_enabled,
+    opel_enabled=a_opel_enabled if a_scaling_enabled else False,
+    opel_3_threshold=a_opel_3_ed_threshold / 100.0 if a_scaling_enabled else 0.90,
+    opel_4_threshold=a_opel_4_ed_threshold / 100.0 if a_scaling_enabled else 0.95,
+    surge_beds=a_opel_3_surge if a_scaling_enabled else 0,
+)
+
+mini_data_b = MiniSchematicData(
+    label="Scenario B (Proposed)",
+    n_triage=b_triage,
+    n_ed_bays=b_ed,
+    n_theatre=b_theatre,
+    n_itu=b_itu,
+    n_ward=b_ward,
+    # Arrivals
+    n_ambulances=b_amb,
+    n_helicopters=b_heli,
+    # Diagnostics
+    n_ct=b_ct,
+    n_xray=b_xray,
+    n_bloods=b_bloods,
+    # Aeromed
+    aeromed_enabled=b_aeromed_enabled,
+    hems_slots_per_day=b_hems_slots,
+    fixedwing_slots_per_day=1 if b_fixedwing_enabled else 0,
+    # Scaling (show ED threshold in schematic badge)
+    scaling_enabled=b_scaling_enabled,
+    opel_enabled=b_opel_enabled if b_scaling_enabled else False,
+    opel_3_threshold=b_opel_3_ed_threshold / 100.0 if b_scaling_enabled else 0.90,
+    opel_4_threshold=b_opel_4_ed_threshold / 100.0 if b_scaling_enabled else 0.95,
+    surge_beds=b_opel_3_surge if b_scaling_enabled else 0,
+)
+
+# Render schematics into the placeholders (above the config expanders)
+with schematic_placeholder_a.container():
+    render_mini_svg(mini_data_a, "a")
+
+with schematic_placeholder_b.container():
+    render_mini_svg(mini_data_b, "b")
+
 # ============ DIFFERENCES SUMMARY ============
 st.markdown("---")
 st.subheader("Configuration Differences")
@@ -170,6 +378,22 @@ comparisons = [
     ("Aeromed Enabled", int(a_aeromed_enabled), int(b_aeromed_enabled)),
     ("HEMS Slots/Day", a_hems_slots, b_hems_slots),
     ("Fixed-Wing Enabled", int(a_fixedwing_enabled), int(b_fixedwing_enabled)),
+    # Capacity Scaling
+    ("Scaling Enabled", int(a_scaling_enabled), int(b_scaling_enabled)),
+    ("OPEL Enabled", int(a_opel_enabled), int(b_opel_enabled)),
+    ("OPEL 3 ED Threshold (%)", a_opel_3_ed_threshold, b_opel_3_ed_threshold),
+    ("OPEL 3 Ward Threshold (%)", a_opel_3_ward_threshold, b_opel_3_ward_threshold),
+    ("OPEL 3 ITU Threshold (%)", a_opel_3_itu_threshold, b_opel_3_itu_threshold),
+    ("OPEL 3 ED Surge", a_opel_3_ed_surge, b_opel_3_ed_surge),
+    ("OPEL 3 Ward Surge", a_opel_3_ward_surge, b_opel_3_ward_surge),
+    ("OPEL 3 ITU Surge", a_opel_3_itu_surge, b_opel_3_itu_surge),
+    ("OPEL 4 ED Threshold (%)", a_opel_4_ed_threshold, b_opel_4_ed_threshold),
+    ("OPEL 4 Ward Threshold (%)", a_opel_4_ward_threshold, b_opel_4_ward_threshold),
+    ("OPEL 4 ITU Threshold (%)", a_opel_4_itu_threshold, b_opel_4_itu_threshold),
+    ("OPEL 4 ED Surge", a_opel_4_ed_surge, b_opel_4_ed_surge),
+    ("OPEL 4 Ward Surge", a_opel_4_ward_surge, b_opel_4_ward_surge),
+    ("OPEL 4 ITU Surge", a_opel_4_itu_surge, b_opel_4_itu_surge),
+    ("Discharge Lounge", a_lounge_capacity, b_lounge_capacity),
 ]
 
 diff_data = []
@@ -255,6 +479,14 @@ available_metrics = [
     'aeromed_fixedwing_count',
     'aeromed_slots_missed',
     'mean_aeromed_slot_wait',
+    # Capacity Scaling metrics
+    'opel_peak_level',
+    'opel_transitions',
+    'scale_up_events',
+    'scale_down_events',
+    'total_additional_bed_hours',
+    'pct_time_at_surge',
+    'patients_diverted',
 ]
 
 with sim_col3:
@@ -301,6 +533,27 @@ if run_comparison:
                 hems=HEMSConfig(slots_per_day=a_hems_slots),
                 fixedwing=FixedWingConfig(enabled=a_fixedwing_enabled),
             ),
+            capacity_scaling=CapacityScalingConfig(
+                enabled=a_scaling_enabled,
+                opel_config=OPELConfig(
+                    enabled=a_opel_enabled,
+                    opel_3_ed_threshold=a_opel_3_ed_threshold / 100.0,
+                    opel_3_ward_threshold=a_opel_3_ward_threshold / 100.0,
+                    opel_3_itu_threshold=a_opel_3_itu_threshold / 100.0,
+                    opel_3_ed_surge_beds=a_opel_3_ed_surge,
+                    opel_3_ward_surge_beds=a_opel_3_ward_surge,
+                    opel_3_itu_surge_beds=a_opel_3_itu_surge,
+                    opel_3_los_reduction_pct=float(a_opel_3_los),
+                    opel_4_ed_threshold=a_opel_4_ed_threshold / 100.0,
+                    opel_4_ward_threshold=a_opel_4_ward_threshold / 100.0,
+                    opel_4_itu_threshold=a_opel_4_itu_threshold / 100.0,
+                    opel_4_ed_surge_beds=a_opel_4_ed_surge,
+                    opel_4_ward_surge_beds=a_opel_4_ward_surge,
+                    opel_4_itu_surge_beds=a_opel_4_itu_surge,
+                    opel_4_enable_divert=a_opel_4_divert,
+                ),
+                discharge_lounge_capacity=a_lounge_capacity,
+            ) if a_scaling_enabled else CapacityScalingConfig(enabled=False),
         )
 
         scenario_b = FullScenario(
@@ -327,6 +580,27 @@ if run_comparison:
                 hems=HEMSConfig(slots_per_day=b_hems_slots),
                 fixedwing=FixedWingConfig(enabled=b_fixedwing_enabled),
             ),
+            capacity_scaling=CapacityScalingConfig(
+                enabled=b_scaling_enabled,
+                opel_config=OPELConfig(
+                    enabled=b_opel_enabled,
+                    opel_3_ed_threshold=b_opel_3_ed_threshold / 100.0,
+                    opel_3_ward_threshold=b_opel_3_ward_threshold / 100.0,
+                    opel_3_itu_threshold=b_opel_3_itu_threshold / 100.0,
+                    opel_3_ed_surge_beds=b_opel_3_ed_surge,
+                    opel_3_ward_surge_beds=b_opel_3_ward_surge,
+                    opel_3_itu_surge_beds=b_opel_3_itu_surge,
+                    opel_3_los_reduction_pct=float(b_opel_3_los),
+                    opel_4_ed_threshold=b_opel_4_ed_threshold / 100.0,
+                    opel_4_ward_threshold=b_opel_4_ward_threshold / 100.0,
+                    opel_4_itu_threshold=b_opel_4_itu_threshold / 100.0,
+                    opel_4_ed_surge_beds=b_opel_4_ed_surge,
+                    opel_4_ward_surge_beds=b_opel_4_ward_surge,
+                    opel_4_itu_surge_beds=b_opel_4_itu_surge,
+                    opel_4_enable_divert=b_opel_4_divert,
+                ),
+                discharge_lounge_capacity=b_lounge_capacity,
+            ) if b_scaling_enabled else CapacityScalingConfig(enabled=False),
         )
 
         with st.spinner(f"Running {n_reps * 2} simulations..."):

@@ -142,6 +142,16 @@ if opel_enabled:
             key="opel_2_ward"
         )
         opel_2_ward = opel_2_ward_pct / 100.0
+        opel_2_itu_pct = st.slider(
+            "ITU Trigger",
+            min_value=70,
+            max_value=95,
+            value=int(getattr(st.session_state.opel_config, 'opel_2_itu_threshold', 0.85) * 100),
+            step=5,
+            format="%d%%",
+            key="opel_2_itu"
+        )
+        opel_2_itu = opel_2_itu_pct / 100.0
 
     with col2:
         st.markdown("**OPEL 3 (Severe)**")
@@ -165,6 +175,16 @@ if opel_enabled:
             key="opel_3_ward"
         )
         opel_3_ward = opel_3_ward_pct / 100.0
+        opel_3_itu_pct = st.slider(
+            "ITU Trigger",
+            min_value=80,
+            max_value=98,
+            value=int(getattr(st.session_state.opel_config, 'opel_3_itu_threshold', 0.90) * 100),
+            step=5,
+            format="%d%%",
+            key="opel_3_itu"
+        )
+        opel_3_itu = opel_3_itu_pct / 100.0
 
     with col3:
         st.markdown("**OPEL 4 (Critical)**")
@@ -188,20 +208,52 @@ if opel_enabled:
             key="opel_4_ward"
         )
         opel_4_ward = opel_4_ward_pct / 100.0
+        opel_4_itu_pct = st.slider(
+            "ITU Trigger",
+            min_value=85,
+            max_value=100,
+            value=int(getattr(st.session_state.opel_config, 'opel_4_itu_threshold', 0.95) * 100),
+            step=5,
+            format="%d%%",
+            key="opel_4_itu"
+        )
+        opel_4_itu = opel_4_itu_pct / 100.0
 
     st.subheader("OPEL Actions")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("**OPEL 3 Actions**")
-        opel_3_surge = st.number_input(
-            "Surge Beds",
-            min_value=0,
-            max_value=20,
-            value=st.session_state.opel_config.opel_3_surge_beds,
-            help="Additional ED bays to open at OPEL 3"
-        )
+        st.markdown("**OPEL 3 Actions (Severe Pressure)**")
+        st.markdown("*Surge Capacity*")
+        surge3_col1, surge3_col2, surge3_col3 = st.columns(3)
+        with surge3_col1:
+            opel_3_ed_surge = st.number_input(
+                "ED Surge",
+                min_value=0,
+                max_value=20,
+                value=int(getattr(st.session_state.opel_config, 'opel_3_ed_surge_beds', 5)),
+                help="Additional ED bays at OPEL 3",
+                key="opel_3_ed_surge"
+            )
+        with surge3_col2:
+            opel_3_ward_surge = st.number_input(
+                "Ward Surge",
+                min_value=0,
+                max_value=15,
+                value=int(getattr(st.session_state.opel_config, 'opel_3_ward_surge_beds', 3)),
+                help="Additional ward beds at OPEL 3",
+                key="opel_3_ward_surge"
+            )
+        with surge3_col3:
+            opel_3_itu_surge = st.number_input(
+                "ITU Surge",
+                min_value=0,
+                max_value=6,
+                value=int(getattr(st.session_state.opel_config, 'opel_3_itu_surge_beds', 1)),
+                help="Additional ITU beds at OPEL 3 (limited by ventilators/staff)",
+                key="opel_3_itu_surge"
+            )
         opel_3_los = st.slider(
             "Discharge Acceleration (% LoS reduction)",
             min_value=0,
@@ -215,14 +267,36 @@ if opel_enabled:
         )
 
     with col2:
-        st.markdown("**OPEL 4 Actions**")
-        opel_4_surge = st.number_input(
-            "Full Surge Beds",
-            min_value=0,
-            max_value=30,
-            value=st.session_state.opel_config.opel_4_surge_beds,
-            help="Additional ED bays for full surge at OPEL 4"
-        )
+        st.markdown("**OPEL 4 Actions (Critical)**")
+        st.markdown("*Full Surge Capacity*")
+        surge4_col1, surge4_col2, surge4_col3 = st.columns(3)
+        with surge4_col1:
+            opel_4_ed_surge = st.number_input(
+                "ED Surge",
+                min_value=0,
+                max_value=30,
+                value=int(getattr(st.session_state.opel_config, 'opel_4_ed_surge_beds', 10)),
+                help="Full ED surge at OPEL 4",
+                key="opel_4_ed_surge"
+            )
+        with surge4_col2:
+            opel_4_ward_surge = st.number_input(
+                "Ward Surge",
+                min_value=0,
+                max_value=20,
+                value=int(getattr(st.session_state.opel_config, 'opel_4_ward_surge_beds', 6)),
+                help="Full ward surge at OPEL 4",
+                key="opel_4_ward_surge"
+            )
+        with surge4_col3:
+            opel_4_itu_surge = st.number_input(
+                "ITU Surge",
+                min_value=0,
+                max_value=10,
+                value=int(getattr(st.session_state.opel_config, 'opel_4_itu_surge_beds', 2)),
+                help="Max ITU surge at OPEL 4 (ventilator limited)",
+                key="opel_4_itu_surge"
+            )
         opel_4_los = st.slider(
             "Aggressive Discharge (% LoS reduction)",
             min_value=0,
@@ -240,14 +314,21 @@ if opel_enabled:
         enabled=opel_enabled,
         opel_2_ed_threshold=opel_2_ed,
         opel_2_ward_threshold=opel_2_ward,
+        opel_2_itu_threshold=opel_2_itu,
         opel_3_ed_threshold=opel_3_ed,
         opel_3_ward_threshold=opel_3_ward,
+        opel_3_itu_threshold=opel_3_itu,
         opel_4_ed_threshold=opel_4_ed,
         opel_4_ward_threshold=opel_4_ward,
-        opel_3_surge_beds=opel_3_surge,
+        opel_4_itu_threshold=opel_4_itu,
+        opel_3_ed_surge_beds=opel_3_ed_surge,
+        opel_3_ward_surge_beds=opel_3_ward_surge,
+        opel_3_itu_surge_beds=opel_3_itu_surge,
         opel_3_los_reduction_pct=float(opel_3_los),
         opel_3_enable_lounge=opel_3_lounge,
-        opel_4_surge_beds=opel_4_surge,
+        opel_4_ed_surge_beds=opel_4_ed_surge,
+        opel_4_ward_surge_beds=opel_4_ward_surge,
+        opel_4_itu_surge_beds=opel_4_itu_surge,
         opel_4_los_reduction_pct=float(opel_4_los),
         opel_4_enable_divert=opel_4_divert,
     )
