@@ -9,7 +9,7 @@ For admitted patients: boarding wait after treatment.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Generator, List, Any, Optional, TYPE_CHECKING
+from typing import Dict, Generator, List, Any, Optional, Union, TYPE_CHECKING
 import itertools
 
 import numpy as np
@@ -22,6 +22,8 @@ from faer.core.entities import (
 )
 from faer.core.incident import MajorIncidentConfig, CASUALTY_PROFILES
 from faer.model.patient import Patient, Acuity, Disposition
+from faer.model.dynamic_resource import DynamicCapacityResource
+from faer.model.scaling_monitor import ScalingMonitor, capacity_scaling_monitor
 
 
 def sample_lognormal(rng: np.random.Generator, mean: float, cv: float) -> float:
@@ -44,28 +46,36 @@ class AEResources:
     Phase 7: Diagnostic resources (CT, X-ray, Bloods).
     Phase 7: Transfer resources (land ambulance, helicopter).
     Phase 9: Downstream resources (Theatre, ITU, Ward).
+    Phase 12: Dynamic capacity resources for scaling.
+
+    Resources can be either simpy.Resource/PriorityResource or DynamicCapacityResource.
+    The DynamicCapacityResource provides compatible request/release interface.
     """
 
-    triage: simpy.PriorityResource
-    ed_bays: simpy.PriorityResource  # Single pool replaces resus/majors/minors
-    handover_bays: simpy.Resource  # Phase 5b: FIFO for ambulances (not priority)
+    triage: Any  # simpy.PriorityResource or DynamicCapacityResource
+    ed_bays: Any  # simpy.PriorityResource or DynamicCapacityResource
+    handover_bays: Any  # simpy.Resource or DynamicCapacityResource
     ambulance_fleet: simpy.Resource  # Phase 5c: Ambulance vehicles
     helicopter_fleet: simpy.Resource  # Phase 5c: Helicopter vehicles
 
     # Phase 7: Diagnostic resources (priority queuing for CT/X-ray/Bloods)
-    diagnostics: Dict[DiagnosticType, simpy.PriorityResource] = field(default_factory=dict)
+    diagnostics: Dict[DiagnosticType, Any] = field(default_factory=dict)
 
     # Phase 7: Transfer resources
     transfer_ambulances: Optional[simpy.Resource] = None
     transfer_helicopters: Optional[simpy.Resource] = None
 
     # Phase 9: Downstream resources
-    theatre_tables: Optional[simpy.PriorityResource] = None
-    itu_beds: Optional[simpy.Resource] = None
-    ward_beds: Optional[simpy.Resource] = None
+    theatre_tables: Optional[Any] = None  # simpy.PriorityResource or DynamicCapacityResource
+    itu_beds: Optional[Any] = None  # simpy.Resource or DynamicCapacityResource
+    ward_beds: Optional[Any] = None  # simpy.Resource or DynamicCapacityResource
 
     # Phase 10: Aeromedical resources
     hems_slots: Optional[simpy.Resource] = None
+
+    # Phase 12: Dynamic resources for scaling monitor
+    dynamic_resources: Dict[str, DynamicCapacityResource] = field(default_factory=dict)
+    scaling_monitor: Optional[ScalingMonitor] = None
 
 
 @dataclass
@@ -144,6 +154,9 @@ class FullResultsCollector:
     incident_arrivals_total: int = 0
     incident_arrivals_by_profile: Dict[str, int] = field(default_factory=dict)
     incident_decon_waits: List[float] = field(default_factory=list)
+
+    # Phase 12: Capacity Scaling tracking
+    scaling_metrics: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         for resource in ["triage", "ed_bays", "handover", "surgery", "itu", "ward",
@@ -2388,6 +2401,7 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
     """Execute full A&E simulation.
 
     Phase 5: Single ED bay pool with priority queuing.
+    Phase 12: Capacity scaling with dynamic resources.
 
     Args:
         scenario: FullScenario configuration.
@@ -2400,7 +2414,17 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
     # Initialize environment
     env = simpy.Environment()
 
-    # Create resources (PriorityResource for priority-based queuing)
+    # Phase 12: Check if capacity scaling is enabled
+    scaling_enabled = (
+        scenario.capacity_scaling is not None and
+        scenario.capacity_scaling.enabled
+    )
+    scaling_config = scenario.capacity_scaling
+
+    # Dictionary to hold dynamic resources for scaling monitor
+    dynamic_resources: Dict[str, DynamicCapacityResource] = {}
+
+    # Create resources - use DynamicCapacityResource when scaling is enabled
     # Phase 5: Single ED bay pool
     # Phase 5b: Handover bays (FIFO, not priority)
     # Phase 5c: Fleet resources for ambulances and helicopters
@@ -2424,9 +2448,11 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
         )
 
     # Phase 9: Downstream resources (Theatre, ITU, Ward)
+    # When scaling enabled, use DynamicCapacityResource for ED and Ward
     theatre_tables = None
     itu_beds = None
     ward_beds = None
+
     if scenario.downstream_enabled:
         if scenario.theatre_config and scenario.theatre_config.enabled:
             theatre_tables = simpy.PriorityResource(
@@ -2435,7 +2461,19 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
         if scenario.itu_config and scenario.itu_config.enabled:
             itu_beds = simpy.Resource(env, capacity=scenario.itu_config.capacity)
         if scenario.ward_config and scenario.ward_config.enabled:
-            ward_beds = simpy.Resource(env, capacity=scenario.ward_config.capacity)
+            if scaling_enabled:
+                # Dynamic ward beds - max capacity is baseline + max surge
+                max_ward = scenario.ward_config.capacity + scaling_config.opel_config.opel_4_surge_beds * 2
+                ward_beds = DynamicCapacityResource(
+                    env=env,
+                    name="ward_beds",
+                    initial_capacity=scenario.ward_config.capacity,
+                    max_capacity=max_ward,
+                    is_priority=False
+                )
+                dynamic_resources["ward_beds"] = ward_beds
+            else:
+                ward_beds = simpy.Resource(env, capacity=scenario.ward_config.capacity)
 
     # Phase 10: Aeromedical resources
     hems_slots = None
@@ -2445,9 +2483,25 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
                 env, capacity=scenario.aeromed_config.hems.slots_per_day
             )
 
+    # Create ED bays - dynamic when scaling enabled
+    if scaling_enabled:
+        # Max ED capacity = baseline + max surge from OPEL 4
+        max_ed = scenario.n_ed_bays + scaling_config.opel_config.opel_4_surge_beds * 2
+        ed_bays = DynamicCapacityResource(
+            env=env,
+            name="ed_bays",
+            initial_capacity=scenario.n_ed_bays,
+            max_capacity=max_ed,
+            is_priority=True
+        )
+        dynamic_resources["ed_bays"] = ed_bays
+    else:
+        ed_bays = simpy.PriorityResource(env, capacity=scenario.n_ed_bays)
+
+    # Create AEResources container
     resources = AEResources(
         triage=simpy.PriorityResource(env, capacity=scenario.n_triage),
-        ed_bays=simpy.PriorityResource(env, capacity=scenario.n_ed_bays),
+        ed_bays=ed_bays,
         handover_bays=simpy.Resource(env, capacity=scenario.n_handover_bays),
         ambulance_fleet=simpy.Resource(env, capacity=scenario.n_ambulances),
         helicopter_fleet=simpy.Resource(env, capacity=scenario.n_helicopters),
@@ -2458,10 +2512,23 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
         itu_beds=itu_beds,
         ward_beds=ward_beds,
         hems_slots=hems_slots,
+        dynamic_resources=dynamic_resources,
     )
 
     # Initialize results collector
     results = FullResultsCollector()
+
+    # Phase 12: Start capacity scaling monitor if enabled
+    scaling_monitor = None
+    if scaling_enabled and dynamic_resources:
+        scaling_monitor = capacity_scaling_monitor(
+            env=env,
+            resources=dynamic_resources,
+            config=scaling_config,
+            results_collector=results,
+            discharge_manager=None  # Future: add discharge manager
+        )
+        resources.scaling_monitor = scaling_monitor
 
     # Shared patient counter for unique IDs across all streams
     patient_counter = itertools.count(1)
@@ -2502,11 +2569,93 @@ def run_full_simulation(scenario: FullScenario, use_multistream: bool = False) -
     total_time = scenario.warm_up + scenario.run_length
     env.run(until=total_time)
 
+    # Phase 12: Collect scaling metrics before computing other metrics
+    if scaling_monitor is not None:
+        scaling_metrics = scaling_monitor.get_metrics()
+
+        # Calculate additional derived metrics
+        run_length_mins = scenario.run_length
+
+        # Time at surge (when any dynamic resource is above baseline)
+        total_surge_time = 0.0
+        for resource_name, resource in dynamic_resources.items():
+            for event in resource.capacity_log:
+                if event.new_capacity > resource.capacity_log[0].new_capacity:
+                    # This is a surge state - count time until next event
+                    pass  # Simplified - use events from monitor instead
+
+        # Use OPEL time breakdown for surge percentage
+        opel_times = scaling_metrics.get('opel_time_at_level', {})
+        from faer.core.scaling import OPELLevel
+        opel_3_4_time = opel_times.get(OPELLevel.OPEL_3, 0) + opel_times.get(OPELLevel.OPEL_4, 0)
+        total_opel_time = sum(opel_times.values()) if opel_times else run_length_mins
+        pct_time_at_surge = (opel_3_4_time / total_opel_time * 100) if total_opel_time > 0 else 0
+
+        # Calculate additional bed-hours from surge
+        total_additional_bed_hours = 0.0
+        for resource_name, resource in dynamic_resources.items():
+            baseline = resource.capacity_log[0].new_capacity if resource.capacity_log else 0
+            timeline = resource.get_capacity_timeline()
+            for i in range(len(timeline) - 1):
+                t_start, cap = timeline[i]
+                t_end = timeline[i + 1][0]
+                if cap > baseline:
+                    additional_beds = cap - baseline
+                    duration_hours = (t_end - t_start) / 60
+                    total_additional_bed_hours += additional_beds * duration_hours
+            # Add final segment to end of run
+            if timeline:
+                t_start, cap = timeline[-1]
+                if cap > baseline:
+                    additional_beds = cap - baseline
+                    duration_hours = (total_time - t_start) / 60
+                    total_additional_bed_hours += additional_beds * duration_hours
+
+        # Convert events to serializable format
+        events_serializable = []
+        for event in scaling_metrics.get('events', []):
+            events_serializable.append({
+                'time': event.time,
+                'rule': event.rule_name,
+                'action': event.action_type,
+                'resource': event.resource,
+                'old_capacity': event.old_capacity,
+                'new_capacity': event.new_capacity,
+                'trigger_value': event.trigger_value,
+                'direction': event.direction,
+            })
+
+        # Convert OPEL times to serializable format
+        opel_time_serializable = {level.value: time for level, time in opel_times.items()} if opel_times else {}
+
+        # Build rule activations dict
+        rule_activations = {}
+        for rule_name, rule_data in scaling_metrics.get('rule_metrics', {}).items():
+            rule_activations[rule_name] = rule_data.get('activations', 0)
+
+        results.scaling_metrics = {
+            'total_scale_up_events': scaling_metrics.get('total_scale_up_events', 0),
+            'total_scale_down_events': scaling_metrics.get('total_scale_down_events', 0),
+            'total_scaling_events': scaling_metrics.get('total_scaling_events', 0),
+            'pct_time_at_surge': pct_time_at_surge,
+            'total_additional_bed_hours': total_additional_bed_hours,
+            'opel_transitions': scaling_metrics.get('opel_transitions', 0),
+            'opel_peak_level': scaling_metrics.get('opel_peak_level', 1),
+            'opel_time_at_level': opel_time_serializable,
+            'patients_diverted': 0,  # Future: track from monitor
+            'rule_activations': rule_activations,
+            'events': events_serializable,
+        }
+
     # Compute metrics
     metrics = results.compute_metrics(scenario.run_length, scenario)
 
     # Add scenario info
     metrics["run_length"] = scenario.run_length
     metrics["warm_up"] = scenario.warm_up
+
+    # Phase 12: Add scaling metrics to output
+    if results.scaling_metrics:
+        metrics["scaling_metrics"] = results.scaling_metrics
 
     return metrics

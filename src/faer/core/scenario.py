@@ -12,6 +12,7 @@ from faer.core.entities import (
     DiagnosticType, TransferType,
 )
 from faer.core.incident import MajorIncidentConfig
+from faer.core.scaling import CapacityScalingConfig
 
 
 # ============== Phase 8: Run Length Presets ==============
@@ -744,6 +745,9 @@ class FullScenario:
     # Phase 11: Major Incident configuration
     major_incident_config: Optional[MajorIncidentConfig] = None
 
+    # Phase 12: Capacity Scaling configuration
+    capacity_scaling: CapacityScalingConfig = field(default_factory=CapacityScalingConfig)
+
     # RNG for diagnostics (Phase 7) - created in __post_init__
     rng_diagnostics: Optional[np.random.Generator] = None
     rng_transfer: Optional[np.random.Generator] = None
@@ -1122,4 +1126,6 @@ class FullScenario:
             aeromed_config=self.aeromed_config,
             # Phase 11: Copy major incident config
             major_incident_config=self.major_incident_config,
+            # Phase 12: Copy capacity scaling config
+            capacity_scaling=self.capacity_scaling,
         )

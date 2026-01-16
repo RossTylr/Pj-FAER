@@ -15,7 +15,7 @@ st.title("Results")
 # Check for results
 if not st.session_state.get("run_complete"):
     st.warning("Please run a simulation first.")
-    st.page_link("pages/5_Run.py", label="Go to Run Simulation")
+    st.page_link("pages/6_Run.py", label="Go to Run Simulation")
     st.stop()
 
 # Support both old key (results) and new key (run_results)
@@ -26,7 +26,7 @@ scenario = st.session_state.get('run_scenario') or st.session_state.get('scenari
 if "util_ed_bays" not in results:
     st.warning("Results are from an older version. Please re-run the simulation to see updated metrics.")
     st.session_state.run_complete = False
-    st.page_link("pages/5_Run.py", label="Go to Run Simulation")
+    st.page_link("pages/6_Run.py", label="Go to Run Simulation")
     st.stop()
 
 n_reps = len(results["arrivals"])
@@ -408,127 +408,127 @@ if "mean_los_discharged" in results:
 st.divider()
 
 # ===== ACUITY STATISTICS =====
-st.header("Acuity Statistics")
-st.caption("Performance by clinical acuity level (assigned at arrival)")
+with st.expander("Acuity Statistics", expanded=False):
+    st.caption("Performance by clinical acuity level (assigned at arrival)")
 
-# Acuity labels and descriptions
-ACUITY_INFO = {
-    "resus": ("Resus", "Immediate life-threatening", "#ff4b4b"),
-    "majors": ("Majors", "Urgent/serious conditions", "#ffa62b"),
-    "minors": ("Minors", "Standard/ambulatory", "#29b09d"),
-}
+    # Acuity labels and descriptions
+    ACUITY_INFO = {
+        "resus": ("Resus", "Immediate life-threatening", "#ff4b4b"),
+        "majors": ("Majors", "Urgent/serious conditions", "#ffa62b"),
+        "minors": ("Minors", "Standard/ambulatory", "#29b09d"),
+    }
 
-# Build acuity statistics table
-acuity_stats = []
-for acuity_key in ["resus", "majors", "minors"]:
-    label, desc, _ = ACUITY_INFO[acuity_key]
-    arrivals = np.mean(results.get(f"arrivals_{acuity_key}", [0]*n_reps))
-    departures = np.mean(results.get(f"departures_{acuity_key}", [0]*n_reps))
-    mean_wait_data = results.get(f"{acuity_key}_mean_wait", [0]*n_reps)
-    p95_wait_data = results.get(f"{acuity_key}_p95_wait", [0]*n_reps)
-    sys_time_data = results.get(f"{acuity_key}_mean_system_time", [0]*n_reps)
+    # Build acuity statistics table
+    acuity_stats = []
+    for acuity_key in ["resus", "majors", "minors"]:
+        label, desc, _ = ACUITY_INFO[acuity_key]
+        arrivals = np.mean(results.get(f"arrivals_{acuity_key}", [0]*n_reps))
+        departures = np.mean(results.get(f"departures_{acuity_key}", [0]*n_reps))
+        mean_wait_data = results.get(f"{acuity_key}_mean_wait", [0]*n_reps)
+        p95_wait_data = results.get(f"{acuity_key}_p95_wait", [0]*n_reps)
+        sys_time_data = results.get(f"{acuity_key}_mean_system_time", [0]*n_reps)
 
-    acuity_stats.append({
-        "Acuity": label,
-        "Description": desc,
-        "Arrivals": f"{arrivals:.0f}",
-        "Departures": f"{departures:.0f}",
-        "Mean Wait (min)": f"{np.mean(mean_wait_data):.1f}",
-        "P95 Wait (min)": f"{np.mean(p95_wait_data):.1f}",
-        "Mean System Time (min)": f"{np.mean(sys_time_data):.0f}",
+        acuity_stats.append({
+            "Acuity": label,
+            "Description": desc,
+            "Arrivals": f"{arrivals:.0f}",
+            "Departures": f"{departures:.0f}",
+            "Mean Wait (min)": f"{np.mean(mean_wait_data):.1f}",
+            "P95 Wait (min)": f"{np.mean(p95_wait_data):.1f}",
+            "Mean System Time (min)": f"{np.mean(sys_time_data):.0f}",
+        })
+
+    acuity_df = pd.DataFrame(acuity_stats)
+    st.dataframe(acuity_df, use_container_width=True, hide_index=True)
+
+    # Acuity wait time comparison chart
+    acuity_wait_data = pd.DataFrame({
+        "Acuity": ["Resus", "Majors", "Minors"],
+        "Mean Wait": [
+            np.mean(results.get("resus_mean_wait", [0]*n_reps)),
+            np.mean(results.get("majors_mean_wait", [0]*n_reps)),
+            np.mean(results.get("minors_mean_wait", [0]*n_reps)),
+        ],
+        "P95 Wait": [
+            np.mean(results.get("resus_p95_wait", [0]*n_reps)),
+            np.mean(results.get("majors_p95_wait", [0]*n_reps)),
+            np.mean(results.get("minors_p95_wait", [0]*n_reps)),
+        ],
     })
 
-acuity_df = pd.DataFrame(acuity_stats)
-st.dataframe(acuity_df, use_container_width=True, hide_index=True)
-
-# Acuity wait time comparison chart
-acuity_wait_data = pd.DataFrame({
-    "Acuity": ["Resus", "Majors", "Minors"],
-    "Mean Wait": [
-        np.mean(results.get("resus_mean_wait", [0]*n_reps)),
-        np.mean(results.get("majors_mean_wait", [0]*n_reps)),
-        np.mean(results.get("minors_mean_wait", [0]*n_reps)),
-    ],
-    "P95 Wait": [
-        np.mean(results.get("resus_p95_wait", [0]*n_reps)),
-        np.mean(results.get("majors_p95_wait", [0]*n_reps)),
-        np.mean(results.get("minors_p95_wait", [0]*n_reps)),
-    ],
-})
-
-fig = px.bar(
-    acuity_wait_data,
-    x="Acuity",
-    y=["Mean Wait", "P95 Wait"],
-    barmode="group",
-    title="Wait Times by Acuity Level",
-    color_discrete_map={"Mean Wait": "#636efa", "P95 Wait": "#ffa62b"},
-    labels={"value": "Wait Time (min)", "variable": "Metric"},
-)
-st.plotly_chart(fig, use_container_width=True)
+    fig = px.bar(
+        acuity_wait_data,
+        x="Acuity",
+        y=["Mean Wait", "P95 Wait"],
+        barmode="group",
+        title="Wait Times by Acuity Level",
+        color_discrete_map={"Mean Wait": "#636efa", "P95 Wait": "#ffa62b"},
+        labels={"value": "Wait Time (min)", "variable": "Metric"},
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
 # ===== PRIORITY STATISTICS =====
-st.header("Priority Statistics")
-st.caption("Performance by triage priority level | NHS breach targets (P1=0min, P2=10min, P3=60min, P4=120min)")
+with st.expander("Priority Statistics & Breach Rates", expanded=False):
+    st.caption("Performance by triage priority level | NHS breach targets (P1=0min, P2=10min, P3=60min, P4=120min)")
 
-# NHS Standard Targets
-PRIORITY_TARGETS = {"P1": 0, "P2": 10, "P3": 60, "P4": 120}
-PRIORITY_LABELS = {
-    "P1": "P1 - Immediate",
-    "P2": "P2 - Very Urgent",
-    "P3": "P3 - Urgent",
-    "P4": "P4 - Standard",
-}
+    # NHS Standard Targets
+    PRIORITY_TARGETS = {"P1": 0, "P2": 10, "P3": 60, "P4": 120}
+    PRIORITY_LABELS = {
+        "P1": "P1 - Immediate",
+        "P2": "P2 - Very Urgent",
+        "P3": "P3 - Urgent",
+        "P4": "P4 - Standard",
+    }
 
-# Build priority statistics table
-priority_stats = []
-for p in ["P1", "P2", "P3", "P4"]:
-    arrivals = np.mean(results.get(f"arrivals_{p}", [0]*n_reps))
-    departures = np.mean(results.get(f"departures_{p}", [0]*n_reps))
-    mean_wait_data = results.get(f"{p}_mean_wait", [0]*n_reps)
-    p95_wait_data = results.get(f"{p}_p95_wait", [0]*n_reps)
-    breach_data = results.get(f"{p}_breach_rate", [0]*n_reps)
-    sys_time_data = results.get(f"{p}_mean_system_time", [0]*n_reps)
+    # Build priority statistics table
+    priority_stats = []
+    for p in ["P1", "P2", "P3", "P4"]:
+        arrivals = np.mean(results.get(f"arrivals_{p}", [0]*n_reps))
+        departures = np.mean(results.get(f"departures_{p}", [0]*n_reps))
+        mean_wait_data = results.get(f"{p}_mean_wait", [0]*n_reps)
+        p95_wait_data = results.get(f"{p}_p95_wait", [0]*n_reps)
+        breach_data = results.get(f"{p}_breach_rate", [0]*n_reps)
+        sys_time_data = results.get(f"{p}_mean_system_time", [0]*n_reps)
 
-    priority_stats.append({
-        "Priority": PRIORITY_LABELS[p],
-        "Target (min)": PRIORITY_TARGETS[p],
-        "Arrivals": f"{arrivals:.0f}",
-        "Departures": f"{departures:.0f}",
-        "Mean Wait (min)": f"{np.mean(mean_wait_data):.1f}",
-        "P95 Wait (min)": f"{np.mean(p95_wait_data):.1f}",
-        "Breach Rate": f"{np.mean(breach_data):.1%}",
-        "Mean System Time (min)": f"{np.mean(sys_time_data):.0f}",
+        priority_stats.append({
+            "Priority": PRIORITY_LABELS[p],
+            "Target (min)": PRIORITY_TARGETS[p],
+            "Arrivals": f"{arrivals:.0f}",
+            "Departures": f"{departures:.0f}",
+            "Mean Wait (min)": f"{np.mean(mean_wait_data):.1f}",
+            "P95 Wait (min)": f"{np.mean(p95_wait_data):.1f}",
+            "Breach Rate": f"{np.mean(breach_data):.1%}",
+            "Mean System Time (min)": f"{np.mean(sys_time_data):.0f}",
+        })
+
+    priority_df = pd.DataFrame(priority_stats)
+    st.dataframe(priority_df, use_container_width=True, hide_index=True)
+
+    # Breach rate visualization
+    breach_data_chart = pd.DataFrame({
+        "Priority": ["P1", "P2", "P3", "P4"],
+        "Breach Rate": [
+            np.mean(results.get("P1_breach_rate", [0]*n_reps)),
+            np.mean(results.get("P2_breach_rate", [0]*n_reps)),
+            np.mean(results.get("P3_breach_rate", [0]*n_reps)),
+            np.mean(results.get("P4_breach_rate", [0]*n_reps)),
+        ],
+        "Target Wait (min)": [0, 10, 60, 120],
     })
 
-priority_df = pd.DataFrame(priority_stats)
-st.dataframe(priority_df, use_container_width=True, hide_index=True)
-
-# Breach rate visualization
-breach_data_chart = pd.DataFrame({
-    "Priority": ["P1", "P2", "P3", "P4"],
-    "Breach Rate": [
-        np.mean(results.get("P1_breach_rate", [0]*n_reps)),
-        np.mean(results.get("P2_breach_rate", [0]*n_reps)),
-        np.mean(results.get("P3_breach_rate", [0]*n_reps)),
-        np.mean(results.get("P4_breach_rate", [0]*n_reps)),
-    ],
-    "Target Wait (min)": [0, 10, 60, 120],
-})
-
-fig = px.bar(
-    breach_data_chart,
-    x="Priority",
-    y="Breach Rate",
-    title="Breach Rates by Priority (% exceeding NHS target)",
-    color="Breach Rate",
-    color_continuous_scale=["#00cc96", "#ffa62b", "#ff4b4b"],
-)
-fig.update_layout(yaxis_tickformat=".0%")
-fig.add_hline(y=0.05, line_dash="dash", line_color="green", annotation_text="5% target")
-st.plotly_chart(fig, use_container_width=True)
+    fig = px.bar(
+        breach_data_chart,
+        x="Priority",
+        y="Breach Rate",
+        title="Breach Rates by Priority (% exceeding NHS target)",
+        color="Breach Rate",
+        color_continuous_scale=["#00cc96", "#ffa62b", "#ff4b4b"],
+    )
+    fig.update_layout(yaxis_tickformat=".0%")
+    fig.add_hline(y=0.05, line_dash="dash", line_color="green", annotation_text="5% target")
+    st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
@@ -694,6 +694,211 @@ with dist_tabs[tab_idx]:
             st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
+
+# ===== CAPACITY SCALING ANALYSIS (Phase 12) =====
+st.header("Capacity Scaling Analysis")
+
+scaling_config = st.session_state.get('scaling_config', None)
+scaling_results = results.get('scaling_metrics', None)
+
+if scaling_config and scaling_config.enabled and scaling_results:
+    # Clinical context paragraph - expert perspectives on what matters
+    st.markdown("""
+    **Clinical Interpretation**: This section shows how the system responded to capacity pressure.
+    - **Bed Management**: Frequent scale-up events indicate demand regularly exceeds baseline capacity
+    - **Emergency Medicine**: Time at surge correlates with corridor care risk and 4-hour breaches
+    - **Healthcare Analytics**: Additional bed-hours enable cost analysis of surge protocols
+    - **Site Operations**: OPEL time breakdown shows escalation status distribution
+    """)
+
+    # Summary row - time-based metrics (most clinically relevant)
+    st.subheader("Capacity Utilisation Summary")
+
+    run_length = scenario.run_length if scenario else 480  # Default to 8 hours
+
+    # Calculate time-based metrics
+    surge_pct = scaling_results.get('pct_time_at_surge', 0)
+    baseline_pct = 100 - surge_pct
+    scale_ups = scaling_results.get('total_scale_up_events', 0)
+    scale_downs = scaling_results.get('total_scale_down_events', 0)
+    total_scale_events = scale_ups + scale_downs
+
+    time_cols = st.columns(4)
+
+    with time_cols[0]:
+        st.metric(
+            "Baseline Operations",
+            f"{baseline_pct:.0f}%",
+            delta="of run time",
+            help="Time operating at normal staffed capacity"
+        )
+
+    with time_cols[1]:
+        st.metric(
+            "Surge Operations",
+            f"{surge_pct:.1f}%",
+            delta="of run time",
+            help="Time at elevated surge capacity - indicates sustained pressure"
+        )
+
+    with time_cols[2]:
+        bed_hours = scaling_results.get('total_additional_bed_hours', 0)
+        st.metric(
+            "Additional Bed-Hours",
+            f"{bed_hours:.1f}",
+            help="Cumulative surge capacity consumed (beds x hours). Use for staffing cost analysis."
+        )
+
+    with time_cols[3]:
+        st.metric(
+            "Escalation Events",
+            f"{total_scale_events:.0f}",
+            help="Total capacity changes. High counts suggest threshold tuning or sustained pressure."
+        )
+
+    # Clinical interpretation of surge percentage
+    if surge_pct > 50:
+        st.error(
+            f"**High Surge Utilisation ({surge_pct:.0f}%)**: System spent majority of time at elevated capacity. "
+            "This indicates **chronic under-capacity** rather than surge response. Consider baseline capacity increase."
+        )
+    elif surge_pct > 25:
+        st.warning(
+            f"**Moderate Surge Utilisation ({surge_pct:.0f}%)**: Significant time at surge capacity. "
+            "Review staffing models and discharge pathways. Surge should be exception, not norm."
+        )
+    elif surge_pct > 5:
+        st.info(
+            f"**Appropriate Surge Use ({surge_pct:.0f}%)**: Surge capacity deployed for peak periods as intended. "
+            "Current baseline appears adequate with surge buffer for spikes."
+        )
+    elif surge_pct > 0:
+        st.success(
+            f"**Minimal Surge ({surge_pct:.1f}%)**: Rare escalation indicates comfortable capacity margin."
+        )
+
+    # Detailed event metrics
+    st.subheader("Scaling Event Detail")
+    event_cols = st.columns(4)
+
+    with event_cols[0]:
+        st.metric(
+            "Scale-Up Events",
+            f"{scale_ups:.0f}",
+            help="Times capacity increased in response to pressure"
+        )
+
+    with event_cols[1]:
+        st.metric(
+            "Scale-Down Events",
+            f"{scale_downs:.0f}",
+            help="Times capacity reduced as pressure eased"
+        )
+
+    with event_cols[2]:
+        # Calculate average surge duration if we have events
+        if scale_ups > 0 and surge_pct > 0:
+            avg_surge_mins = (surge_pct / 100) * run_length / max(scale_ups, 1)
+            st.metric(
+                "Avg Surge Duration",
+                f"{avg_surge_mins:.0f} min",
+                help="Average time per surge episode before de-escalation"
+            )
+        else:
+            st.metric("Avg Surge Duration", "N/A", help="No surge events to calculate")
+
+    with event_cols[3]:
+        # Surge frequency (events per hour)
+        if run_length > 0:
+            surge_freq = scale_ups / (run_length / 60)
+            st.metric(
+                "Surge Frequency",
+                f"{surge_freq:.2f}/hr",
+                help="Scale-up events per hour. >1/hr suggests threshold tuning needed."
+            )
+        else:
+            st.metric("Surge Frequency", "N/A")
+
+    # OPEL metrics if available
+    if scaling_config.opel_config.enabled:
+        st.subheader("OPEL Status")
+        opel_cols = st.columns(3)
+
+        with opel_cols[0]:
+            peak = scaling_results.get('opel_peak_level', 1)
+            peak_labels = {1: "OPEL 1 (Normal)", 2: "OPEL 2 (Moderate)", 3: "OPEL 3 (Severe)", 4: "OPEL 4 (Critical)"}
+            st.metric("Peak OPEL Level", peak_labels.get(peak, f"OPEL {peak}"))
+
+        with opel_cols[1]:
+            transitions = scaling_results.get('opel_transitions', 0)
+            st.metric("OPEL Transitions", f"{transitions:.0f}")
+
+        with opel_cols[2]:
+            diverted = scaling_results.get('patients_diverted', 0)
+            st.metric("Patients Diverted", f"{diverted:.0f}")
+
+        # OPEL time breakdown
+        opel_times = scaling_results.get('opel_time_at_level', {})
+        if opel_times and any(v > 0 for v in opel_times.values()):
+            total_time = sum(opel_times.values())
+            if total_time > 0:
+                opel_pct = {f"OPEL {k}": (v / total_time) * 100 for k, v in opel_times.items()}
+                opel_df = pd.DataFrame({
+                    'Level': list(opel_pct.keys()),
+                    'Time (%)': list(opel_pct.values())
+                })
+                fig = px.bar(
+                    opel_df,
+                    x='Level',
+                    y='Time (%)',
+                    title="Time at Each OPEL Level",
+                    color='Level',
+                    color_discrete_map={
+                        'OPEL 1': '#2ecc71',
+                        'OPEL 2': '#f1c40f',
+                        'OPEL 3': '#e67e22',
+                        'OPEL 4': '#e74c3c'
+                    }
+                )
+                fig.update_layout(showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+
+    # Rule effectiveness
+    rule_activations = scaling_results.get('rule_activations', {})
+    if rule_activations:
+        st.subheader("Rule Effectiveness")
+        rule_df = pd.DataFrame({
+            'Rule': list(rule_activations.keys()),
+            'Activations': list(rule_activations.values())
+        }).sort_values('Activations', ascending=False)
+        st.dataframe(rule_df, use_container_width=True, hide_index=True)
+
+    # Scaling event timeline
+    events = scaling_results.get('events', [])
+    if events:
+        with st.expander("Scaling Event Timeline"):
+            events_df = pd.DataFrame(events)
+            events_df['time_hrs'] = events_df['time'] / 60
+            st.dataframe(
+                events_df[['time_hrs', 'rule', 'action', 'resource', 'old_capacity', 'new_capacity', 'direction']].rename(
+                    columns={'time_hrs': 'Time (hrs)', 'rule': 'Rule', 'action': 'Action', 'resource': 'Resource',
+                             'old_capacity': 'Old', 'new_capacity': 'New', 'direction': 'Direction'}
+                ),
+                use_container_width=True,
+                hide_index=True
+            )
+
+    st.divider()
+
+else:
+    # Scaling not enabled - show placeholder with link
+    st.info(
+        "Capacity scaling was not enabled for this simulation run. "
+        "Enable OPEL-based scaling to see dynamic capacity analysis including surge utilisation, "
+        "OPEL status tracking, and clinical interpretations."
+    )
+    st.page_link("pages/4_Capacity_Scaling.py", label="Go to Capacity Scaling Configuration")
+    st.divider()
 
 # ===== SCENARIO CONFIGURATION =====
 st.header("Scenario Configuration")

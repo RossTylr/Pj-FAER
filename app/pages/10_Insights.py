@@ -90,7 +90,7 @@ if "run_results" not in st.session_state:
     """)
 
     if st.button("Go to Run Page"):
-        st.switch_page("pages/5_Run.py")
+        st.switch_page("pages/6_Run.py")
 
     st.stop()
 
@@ -321,6 +321,7 @@ analysis_tabs = st.tabs([
     "Expert Perspectives",
     "Structural Assessment",
     "Peak Load Analysis",
+    "Capacity Scaling",
     "Key Metrics",
 ])
 
@@ -526,8 +527,279 @@ with analysis_tabs[2]:
                 "parameters most of the time."
             )
 
-# ===== TAB 4: KEY METRICS =====
+# ===== TAB 4: CAPACITY SCALING INSIGHTS =====
 with analysis_tabs[3]:
+    st.subheader("Capacity Scaling Insights")
+
+    # Get scaling configuration and results from session state
+    scaling_config = st.session_state.get('scaling_config', None)
+    scaling_results = st.session_state.get('run_results', {}).get('scaling_metrics', None)
+
+    if scaling_config and scaling_config.enabled and scaling_results:
+        st.caption(
+            "Analysis of dynamic capacity adjustments and OPEL-based escalation responses. "
+            "Insights derived from multiple clinical perspectives."
+        )
+
+        # Extract scaling metrics
+        surge_pct = scaling_results.get('pct_time_at_surge', 0)
+        scale_ups = scaling_results.get('total_scale_up_events', 0)
+        scale_downs = scaling_results.get('total_scale_down_events', 0)
+        bed_hours = scaling_results.get('total_additional_bed_hours', 0)
+        peak_opel = scaling_results.get('opel_peak_level', 1)
+        opel_transitions = scaling_results.get('opel_transitions', 0)
+        patients_diverted = scaling_results.get('patients_diverted', 0)
+        opel_times = scaling_results.get('opel_time_at_level', {})
+
+        # Key metrics row
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("Time at Surge", f"{surge_pct:.1f}%", help="Percentage of run at elevated capacity")
+
+        with col2:
+            st.metric("Scale Events", f"{scale_ups + scale_downs}", help="Total capacity changes")
+
+        with col3:
+            st.metric("Additional Bed-Hours", f"{bed_hours:.1f}", help="Surge capacity consumed")
+
+        with col4:
+            opel_labels = {1: "OPEL 1", 2: "OPEL 2", 3: "OPEL 3", 4: "OPEL 4"}
+            st.metric("Peak OPEL", opel_labels.get(peak_opel, f"OPEL {peak_opel}"))
+
+        st.markdown("---")
+
+        # Clinical expert interpretations
+        st.markdown("### Expert Interpretations")
+
+        # Determine severity based on metrics
+        if surge_pct > 50 or peak_opel >= 4:
+            overall_severity = "CRITICAL"
+            severity_color = "red"
+        elif surge_pct > 25 or peak_opel >= 3:
+            overall_severity = "HIGH"
+            severity_color = "orange"
+        elif surge_pct > 10:
+            overall_severity = "MEDIUM"
+            severity_color = "yellow"
+        else:
+            overall_severity = "LOW"
+            severity_color = "green"
+
+        st.markdown(f"**Overall Scaling Status**: :{severity_color}[{overall_severity}]")
+
+        # Bed Manager perspective
+        with st.expander("**Bed Manager** - Capacity Planning", expanded=(overall_severity in ["CRITICAL", "HIGH"])):
+            st.markdown("**Focus**: Surge utilisation patterns and baseline adequacy")
+
+            if surge_pct > 50:
+                st.error(
+                    f"**Assessment**: System spent {surge_pct:.0f}% of time at surge capacity. "
+                    "This indicates **chronic under-capacity** rather than appropriate surge response. "
+                    "Baseline staffed capacity is insufficient for demand."
+                )
+                concerns = [
+                    "Surge capacity being used as default operating mode",
+                    "Staff fatigue risk from sustained elevated operations",
+                    "No buffer remaining for true surge events",
+                ]
+                recommendations = [
+                    "Review baseline bed establishment against demand patterns",
+                    "Consider permanent capacity increase rather than relying on surge",
+                    "Audit discharge pathways for delays (social care, transport)",
+                ]
+            elif surge_pct > 25:
+                st.warning(
+                    f"**Assessment**: Significant time ({surge_pct:.0f}%) spent at elevated capacity. "
+                    "Surge protocols are being activated frequently, suggesting demand regularly exceeds baseline."
+                )
+                concerns = [
+                    "Frequent escalation indicates recurring capacity shortfall",
+                    f"{scale_ups} scale-up events may indicate threshold tuning needed",
+                ]
+                recommendations = [
+                    "Review arrival patterns to anticipate peak periods",
+                    "Consider pre-emptive capacity adjustments for known busy periods",
+                    "Evaluate discharge acceleration effectiveness",
+                ]
+            elif surge_pct > 5:
+                st.info(
+                    f"**Assessment**: Appropriate surge utilisation ({surge_pct:.0f}%). "
+                    "System baseline appears adequate with surge buffer deployed for peaks as intended."
+                )
+                concerns = ["Monitor for trends indicating baseline degradation"]
+                recommendations = ["Continue current capacity model", "Review quarterly for demand changes"]
+            else:
+                st.success(
+                    f"**Assessment**: Minimal surge activation ({surge_pct:.1f}%). "
+                    "Comfortable capacity margin maintained."
+                )
+                concerns = []
+                recommendations = ["System well-balanced for current demand"]
+
+            if concerns:
+                st.markdown("**Concerns:**")
+                for c in concerns:
+                    st.markdown(f"- {c}")
+
+            if recommendations:
+                st.markdown("**Recommendations:**")
+                for r in recommendations:
+                    st.markdown(f"- {r}")
+
+        # Emergency Medicine perspective
+        with st.expander("**Emergency Physician** - Patient Safety", expanded=(peak_opel >= 3)):
+            st.markdown("**Focus**: Impact on patient flow and clinical safety")
+
+            if peak_opel >= 4:
+                st.error(
+                    f"**Assessment**: System reached OPEL 4 (Crisis). "
+                    "At this level, safe care delivery is compromised. "
+                    f"{patients_diverted} patients were diverted."
+                )
+                st.markdown("**Concerns:**")
+                st.markdown("- 4-hour target breaches highly likely at OPEL 4")
+                st.markdown("- Corridor care / hallway boarding probable")
+                st.markdown("- Diversion impacts regional capacity")
+                st.markdown("**Recommendations:**")
+                st.markdown("- Review escalation trigger thresholds")
+                st.markdown("- Ensure early discharge protocols activate at OPEL 2")
+                st.markdown("- Coordinate regional mutual aid agreements")
+            elif peak_opel >= 3:
+                st.warning(
+                    f"**Assessment**: System reached OPEL 3 (Severe). "
+                    "Quality of care at risk during these periods."
+                )
+                st.markdown("**Concerns:**")
+                st.markdown("- Wait times likely exceeded 4-hour standard")
+                st.markdown("- High acuity patients may experience delays")
+                st.markdown("**Recommendations:**")
+                st.markdown("- Ensure rapid discharge activation at OPEL 3")
+                st.markdown("- Review surge bed activation speed")
+            else:
+                st.success(
+                    f"**Assessment**: Peak OPEL {peak_opel} - System maintained safe operating levels. "
+                    "Patient flow managed within acceptable parameters."
+                )
+
+        # Healthcare Analytics perspective
+        with st.expander("**Healthcare Analyst** - Resource Economics"):
+            st.markdown("**Focus**: Cost implications and efficiency metrics")
+
+            # Calculate estimated costs (illustrative)
+            hourly_surge_cost = 150  # GBP per additional bed-hour (staff, consumables)
+            estimated_surge_cost = bed_hours * hourly_surge_cost
+
+            st.markdown(f"**Surge Capacity Consumed**: {bed_hours:.1f} bed-hours")
+            st.markdown(f"**Estimated Surge Cost**: £{estimated_surge_cost:,.0f}")
+            st.caption("(Estimated at £150/bed-hour for additional staffing and resources)")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("**Efficiency Indicators:**")
+                if scale_ups > 0:
+                    avg_surge_duration = (surge_pct / 100) * 480 / scale_ups  # Assuming 8hr run
+                    st.markdown(f"- Avg surge episode: {avg_surge_duration:.0f} min")
+                st.markdown(f"- Escalation events: {scale_ups + scale_downs}")
+                st.markdown(f"- OPEL transitions: {opel_transitions}")
+
+            with col2:
+                st.markdown("**Cost-Benefit Considerations:**")
+                if surge_pct > 30:
+                    st.markdown("- High surge costs suggest baseline investment may be cheaper")
+                elif surge_pct > 10:
+                    st.markdown("- Moderate surge costs - current model acceptable")
+                else:
+                    st.markdown("- Low surge costs - efficient capacity management")
+
+        # OPEL time breakdown
+        if opel_times and any(v > 0 for v in opel_times.values()):
+            st.markdown("---")
+            st.markdown("### OPEL Time Distribution")
+
+            total_time = sum(opel_times.values())
+            if total_time > 0:
+                import pandas as pd
+
+                # Handle different key formats (int vs OPELLevel enum)
+                opel_pct = {}
+                for k, v in opel_times.items():
+                    if hasattr(k, 'value'):  # OPELLevel enum
+                        label = f"OPEL {k.value}"
+                    else:
+                        label = f"OPEL {k}"
+                    opel_pct[label] = (v / total_time) * 100
+
+                opel_df = pd.DataFrame({
+                    'Level': list(opel_pct.keys()),
+                    'Time (%)': list(opel_pct.values())
+                })
+
+                # Sort by OPEL level
+                opel_df['sort_key'] = opel_df['Level'].str.extract(r'(\d)').astype(int)
+                opel_df = opel_df.sort_values('sort_key').drop('sort_key', axis=1)
+
+                import plotly.express as px
+
+                fig = px.bar(
+                    opel_df,
+                    x='Level',
+                    y='Time (%)',
+                    title="Time Spent at Each OPEL Level",
+                    color='Level',
+                    color_discrete_map={
+                        'OPEL 1': '#27ae60',
+                        'OPEL 2': '#f39c12',
+                        'OPEL 3': '#e67e22',
+                        'OPEL 4': '#c0392b'
+                    }
+                )
+                fig.update_layout(showlegend=False, yaxis_title="Percentage of Run Time")
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Clinical interpretation of OPEL distribution
+                opel_3_4_pct = opel_pct.get('OPEL 3', 0) + opel_pct.get('OPEL 4', 0)
+                opel_1_pct = opel_pct.get('OPEL 1', 0)
+
+                if opel_3_4_pct > 30:
+                    st.error(
+                        f"**Concern**: {opel_3_4_pct:.0f}% of time at OPEL 3/4 indicates sustained severe pressure. "
+                        "System operating in crisis mode too frequently."
+                    )
+                elif opel_3_4_pct > 10:
+                    st.warning(
+                        f"**Note**: {opel_3_4_pct:.0f}% time at OPEL 3/4. Monitor for increasing trend."
+                    )
+                elif opel_1_pct > 80:
+                    st.success(
+                        f"**Good**: {opel_1_pct:.0f}% time at OPEL 1 (Normal). System well-managed."
+                    )
+
+    else:
+        st.info(
+            "Capacity scaling was not enabled for this simulation run. "
+            "Enable OPEL-based scaling to see dynamic capacity insights."
+        )
+
+        st.page_link("pages/4_Capacity_Scaling.py", label="Go to Capacity Scaling Configuration")
+
+        st.markdown("""
+        **What capacity scaling insights provide:**
+        - Time spent at each OPEL escalation level
+        - Surge capacity utilisation patterns
+        - Cost implications of additional bed-hours
+        - Expert perspectives on capacity adequacy
+
+        **To enable:**
+        1. Click the link above to go to Capacity Scaling configuration
+        2. Enable OPEL-based escalation or add custom rules
+        3. Run a new simulation on the Run page
+        4. Return here to see capacity insights
+        """)
+
+# ===== TAB 5: KEY METRICS =====
+with analysis_tabs[4]:
     st.subheader("Key Metrics Summary")
 
     col1, col2, col3 = st.columns(3)

@@ -77,6 +77,9 @@ def multiple_replications(
 
     results: Dict[str, List[float]] = {name: [] for name in metric_names}
 
+    # Phase 12: Track scaling metrics across replications
+    scaling_metrics_list: List[Dict[str, Any]] = []
+
     for rep in range(n_reps):
         # Create scenario with different seed for this rep
         rep_scenario = scenario.clone_with_seed(scenario.random_seed + rep)
@@ -92,11 +95,79 @@ def multiple_replications(
             if name in run_results:
                 results[name].append(run_results[name])
 
+        # Phase 12: Collect scaling metrics if present
+        if 'scaling_metrics' in run_results:
+            scaling_metrics_list.append(run_results['scaling_metrics'])
+
         # Report progress if callback provided
         if progress_callback is not None:
             progress_callback(rep + 1, n_reps)
 
+    # Phase 12: Aggregate scaling metrics across replications
+    if scaling_metrics_list:
+        results['scaling_metrics'] = _aggregate_scaling_metrics(scaling_metrics_list)
+
     return results
+
+
+def _aggregate_scaling_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate scaling metrics across multiple replications.
+
+    For numeric metrics, computes mean across replications.
+    For events, concatenates all events with replication index.
+
+    Args:
+        metrics_list: List of scaling metrics dictionaries from each replication.
+
+    Returns:
+        Aggregated scaling metrics dictionary.
+    """
+    if not metrics_list:
+        return {}
+
+    n_reps = len(metrics_list)
+
+    # Aggregate numeric metrics by taking mean
+    numeric_keys = [
+        'total_scale_up_events', 'total_scale_down_events', 'total_scaling_events',
+        'pct_time_at_surge', 'total_additional_bed_hours', 'opel_transitions',
+        'patients_diverted'
+    ]
+
+    aggregated = {}
+
+    for key in numeric_keys:
+        values = [m.get(key, 0) for m in metrics_list]
+        aggregated[key] = sum(values) / n_reps if values else 0
+
+    # Peak OPEL level - take maximum across replications
+    peak_levels = [m.get('opel_peak_level', 1) for m in metrics_list]
+    aggregated['opel_peak_level'] = max(peak_levels) if peak_levels else 1
+
+    # OPEL time at level - average across replications
+    opel_times = {}
+    for level in [1, 2, 3, 4]:
+        times = [m.get('opel_time_at_level', {}).get(level, 0) for m in metrics_list]
+        opel_times[level] = sum(times) / n_reps if times else 0
+    aggregated['opel_time_at_level'] = opel_times
+
+    # Rule activations - sum across replications then divide by n_reps
+    all_rules = set()
+    for m in metrics_list:
+        all_rules.update(m.get('rule_activations', {}).keys())
+
+    rule_activations = {}
+    for rule in all_rules:
+        counts = [m.get('rule_activations', {}).get(rule, 0) for m in metrics_list]
+        rule_activations[rule] = sum(counts) / n_reps if counts else 0
+    aggregated['rule_activations'] = rule_activations
+
+    # Events - take from first replication only (representative sample)
+    # Including all events from all replications would be too verbose
+    if metrics_list and 'events' in metrics_list[0]:
+        aggregated['events'] = metrics_list[0]['events']
+
+    return aggregated
 
 
 def run_scenario_comparison(

@@ -32,6 +32,7 @@ from faer.core.scenario import (
     FixedWingConfig,
     MissedSlotConfig,
 )
+from faer.core.scaling import CapacityScalingConfig
 from faer.core.entities import DiagnosticType, Priority, ArrivalMode
 from faer.experiment.runner import multiple_replications
 from app.components.schematic import (
@@ -349,6 +350,9 @@ def build_scenario_from_session(run_length: float, warm_up: float, random_seed: 
 
         # Aeromed config
         aeromed_config=aeromed_config,
+
+        # Capacity Scaling config (Phase 12)
+        capacity_scaling=st.session_state.get('scaling_config', CapacityScalingConfig()),
     )
 
     return scenario
@@ -360,7 +364,7 @@ def build_scenario_from_session(run_length: float, warm_up: float, random_seed: 
 st.header("Configuration Summary")
 st.markdown("Review your configuration before running.")
 
-tab_arrivals, tab_resources, tab_schematic = st.tabs(["Arrivals", "Resources", "Schematic"])
+tab_arrivals, tab_resources, tab_scaling, tab_schematic = st.tabs(["Arrivals", "Resources", "Scaling", "Schematic"])
 
 with tab_arrivals:
     col1, col2, col3 = st.columns(3)
@@ -443,6 +447,56 @@ with tab_resources:
         with col3:
             fw_status = "Enabled" if st.session_state.get('fixedwing_enabled', False) else "Disabled"
             st.write(f"Fixed-Wing: {fw_status}")
+
+with tab_scaling:
+    # Capacity Scaling summary
+    scaling_config = st.session_state.get('scaling_config', CapacityScalingConfig())
+
+    if scaling_config.enabled:
+        st.success("Capacity Scaling: **Enabled**")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            # Count total rules
+            from faer.core.scaling import create_opel_rules
+            total_rules = len(scaling_config.rules)
+            if scaling_config.opel_config.enabled:
+                total_rules += len(create_opel_rules(scaling_config.opel_config))
+            st.metric("Total Rules", total_rules)
+
+        with col2:
+            opel_status = "Yes" if scaling_config.opel_config.enabled else "No"
+            st.metric("OPEL Enabled", opel_status)
+
+        with col3:
+            lounge = scaling_config.discharge_lounge_capacity
+            st.metric("Discharge Lounge", f"{lounge} spaces" if lounge > 0 else "Disabled")
+
+        if scaling_config.opel_config.enabled:
+            st.markdown("---")
+            st.markdown("**OPEL Thresholds**")
+            opel = scaling_config.opel_config
+            opel_data = {
+                'Level': ['OPEL 2', 'OPEL 3', 'OPEL 4'],
+                'ED Trigger': [f"{opel.opel_2_ed_threshold:.0%}", f"{opel.opel_3_ed_threshold:.0%}", f"{opel.opel_4_ed_threshold:.0%}"],
+                'Ward Trigger': [f"{opel.opel_2_ward_threshold:.0%}", f"{opel.opel_3_ward_threshold:.0%}", f"{opel.opel_4_ward_threshold:.0%}"],
+                'Actions': [
+                    'Monitor',
+                    f'+{opel.opel_3_surge_beds} beds, {opel.opel_3_los_reduction_pct:.0f}% LoS',
+                    f'+{opel.opel_4_surge_beds} beds, {opel.opel_4_los_reduction_pct:.0f}% LoS, divert'
+                ]
+            }
+            st.dataframe(pd.DataFrame(opel_data), use_container_width=True, hide_index=True)
+
+        if scaling_config.rules:
+            st.markdown("---")
+            st.markdown(f"**Custom Rules**: {len(scaling_config.rules)}")
+            for rule in scaling_config.rules:
+                st.write(f"- {rule.name}: {rule.trigger.trigger_type.value} @ {rule.trigger.threshold:.0%}")
+    else:
+        st.info("Capacity Scaling: **Disabled**")
+        st.markdown("Configure scaling rules on the **Capacity Scaling** page to enable dynamic surge protocols.")
 
 with tab_schematic:
     schematic = build_capacity_graph_from_params(
@@ -611,7 +665,7 @@ if st.session_state.get('run_complete') and 'run_results' in st.session_state:
         st.success("Simulation complete. View detailed results below.")
 
     # Prominent link to Results page
-    st.page_link("pages/6_Results.py", label="View Full Results & Analysis", use_container_width=True)
+    st.page_link("pages/7_Results.py", label="View Full Results & Analysis", use_container_width=True)
 
 # No results yet
 else:
