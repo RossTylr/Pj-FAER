@@ -4,7 +4,11 @@
 
 ## Overview
 
-This document provides instructions for integrating the React-based hospital schematic visualization with FAER-M (Framework for Acute and Emergency Resources - Model). The architecture is designed to be **modular and expandable** - supporting additional beds, departments, and custom hospital configurations.
+This document provides instructions for integrating the React-based hospital schematic visualization with FAER-M (Framework for Acute and Emergency Resources - Model). The architecture is designed to be **modular and expandable** - supporting:
+
+- **Dynamic capacity scaling** - Departments that grow/shrink at runtime
+- **Bolt-on modules** - New departments added without disrupting existing flow
+- **OPEL-triggered surge** - Automatic capacity activation based on pressure
 
 ---
 
@@ -26,454 +30,912 @@ SVG Render (Interactive)
 ```
 
 ### Key Files
-| File | Purpose |
-|------|---------|
-| `app/components/react_schematic/data.py` | Python dataclasses & builder functions |
-| `app/components/react_schematic/src/Schematic.tsx` | React SVG renderer |
-| `src/faer/core/entities.py` | Core enums (NodeType, BedState, etc.) |
-| `src/faer/core/scenario.py` | Configuration dataclasses |
+
+| Layer | File | Purpose |
+|-------|------|---------|
+| **Data Models** | `app/components/react_schematic/data.py` | Python dataclasses & builder functions |
+| **React UI** | `app/components/react_schematic/src/Schematic.tsx` | SVG renderer |
+| **Core Enums** | `src/faer/core/entities.py` | NodeType, BedState, etc. |
+| **Config** | `src/faer/core/scenario.py` | Department configuration dataclasses |
+| **Scaling** | `src/faer/core/scaling.py` | OPEL levels, triggers, actions |
+| **Dynamic Resources** | `src/faer/model/dynamic_resource.py` | Runtime capacity changes |
+| **Scaling Monitor** | `src/faer/model/scaling_monitor.py` | Background trigger evaluation |
 
 ---
 
-## Part 1: Adding New Beds (Capacity Expansion)
+## Part 1: Department Size Scaling (Vertical Growth)
 
-### Step 1.1: Update Configuration Dataclass
+Departments can **increase in size** dynamically during simulation through the `DynamicCapacityResource` pattern.
 
-When adding new bed types or expanding capacity, modify the appropriate config in `src/faer/core/scenario.py`:
-
-```
-Location: src/faer/core/scenario.py
-
-For existing node types:
-- Modify the `capacity` default value in the relevant config dataclass
-- Example: ITUConfig.capacity, WardConfig.capacity
-
-For NEW bed types within existing departments:
-- Add a new field to the config dataclass
-- Example: Add `high_dependency_beds: int = 4` to ITUConfig
-```
-
-### Step 1.2: Session State Integration
-
-Ensure Streamlit persists the new capacity:
+### 1.1 Understanding the Dynamic Resource Architecture
 
 ```
-Location: app/pages/2_Resources.py
-
-Pattern to follow:
-1. Add number_input widget for new bed type
-2. Store in st.session_state with descriptive key
-3. Pass to scenario builder
+┌─────────────────────────────────────────────────────────────┐
+│                   DynamicCapacityResource                   │
+├─────────────────────────────────────────────────────────────┤
+│  initial_capacity: 20    ←── Baseline beds (always active)  │
+│  max_capacity: 30        ←── Ceiling (SimPy resource size)  │
+│  current_capacity: 24    ←── Active slots (runtime value)   │
+│  surge_beds: 10          ←── Available to activate          │
+├─────────────────────────────────────────────────────────────┤
+│  add_capacity(4)         →   current: 20 → 24               │
+│  remove_capacity(2)      →   current: 24 → 22               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Step 1.3: Schematic Data Builder
+**Key Insight**: SimPy resource is created at `max_capacity`, but only `current_capacity` slots are active. Scaling adds/removes from the active pool.
 
-Update the builder to include new capacity:
-
-```
-Location: app/components/react_schematic/data.py
-
-In build_schematic_from_config():
-1. Read new capacity from session_state
-2. Create NodeState with new capacity
-3. Add to nodes dict
-
-In build_schematic_from_results():
-1. Calculate utilisation from simulation results
-2. Map result keys to node IDs
-```
-
----
-
-## Part 2: Adding New Departments (Horizontal Expansion)
-
-### Step 2.1: Define Department Type
-
-Add new NodeType enum value:
+### 1.2 Configuration for Scalable Departments
 
 ```
-Location: src/faer/core/entities.py
+Location: src/faer/core/scaling.py
 
-Add to NodeType enum:
-- Choose next available integer value
-- Use descriptive name (e.g., RADIOLOGY, PAEDIATRIC_ED, BURNS_UNIT)
-```
-
-### Step 2.2: Create Department Config
-
-Add new configuration dataclass:
-
-```
-Location: src/faer/core/scenario.py
-
-Pattern to follow:
 @dataclass
-class NewDeptConfig:
-    capacity: int = X
-    los_mean_hours: float = Y
-    los_cv: float = Z
-    enabled: bool = True
-    # Add routing probabilities to other departments
-    to_ward_prob: float = 0.0
-    to_itu_prob: float = 0.0
+class CapacityScalingConfig:
+    enabled: bool = False
+
+    # Baseline capacities (always available)
+    baseline_ed_bays: int = 20
+    baseline_ward_beds: int = 30
+    baseline_itu_beds: int = 6
+
+    # Surge capacities (activated on demand)
+    opel_3_ed_surge_beds: int = 4
+    opel_3_ward_surge_beds: int = 8
+    opel_3_itu_surge_beds: int = 2
+
+    # Maximum ceiling
+    max_ed_bays: int = 28
+    max_ward_beds: int = 45
+    max_itu_beds: int = 10
 ```
 
-### Step 2.3: Update FullScenario
+### 1.3 OPEL-Triggered Scaling
 
-Add config reference to FullScenario:
-
-```
-Location: src/faer/core/scenario.py
-
-In FullScenario dataclass:
-1. Add field: new_dept: NewDeptConfig = field(default_factory=NewDeptConfig)
-2. Add to routing matrix generation
-```
-
-### Step 2.4: React Schematic - Add Node Position
-
-Define visual placement:
+The NHS OPEL (Operational Pressures Escalation Levels) framework drives automatic scaling:
 
 ```
-Location: app/components/react_schematic/src/Schematic.tsx
-
-In NODE_POSITIONS object, add coordinates:
-- Consider the crucifix layout pattern
-- Horizontal flow: Entry → Triage → ED → Theatre → Exit
-- Vertical branches: ITU (above), Ward (below)
-
-Placement guidelines:
-- Main lane Y = 500 (horizontal center)
-- Above lane Y < 500 (e.g., ITU at 230)
-- Below lane Y > 500 (e.g., Ward at 770)
-- Spacing X ~ 270 between nodes
+OPEL Level │ Threshold │ Actions
+───────────┼───────────┼──────────────────────────────────────
+OPEL 1     │ < 70%     │ Normal operations
+OPEL 2     │ 70-85%    │ Flow focus, discharge push
+OPEL 3     │ 85-95%    │ Surge capacity activated
+OPEL 4     │ > 95%     │ Full escalation, diversions
 ```
 
-### Step 2.5: React Schematic - Edge Routing
+**Schematic visualization must show**:
+- Current OPEL level badge
+- Surge beds as distinct visual element
+- Capacity bar showing baseline vs surge
 
-Add connection paths:
+### 1.4 Implementing Scalable Node in Schematic
 
-```
-Location: app/components/react_schematic/src/Schematic.tsx
-
-In renderEdge() function:
-1. Add case for new source/target combinations
-2. Choose path type:
-   - Straight horizontal: same Y coordinate
-   - Curved entry: from entry nodes (X=120)
-   - Vertical: crucifix arm connections
-```
-
-### Step 2.6: Python Data Builder - Department Node
-
-Add node creation:
+**Step 1: Extend NodeState for scaling**
 
 ```
 Location: app/components/react_schematic/data.py
 
-In build_schematic_from_config():
-    if new_dept_enabled:
-        nodes["new_dept"] = NodeState(
-            id="new_dept",
-            label="New Department",
-            node_type="resource",
-            capacity=new_dept_capacity,
+@dataclass
+class NodeState:
+    id: str
+    label: str
+    node_type: str
+    capacity: Optional[int]           # Current active capacity
+    baseline_capacity: Optional[int]  # NEW: Always-on beds
+    max_capacity: Optional[int]       # NEW: Ceiling
+    surge_active: int = 0             # NEW: Currently activated surge beds
+    occupied: int
+    throughput_per_hour: float
+    mean_wait_mins: float
+
+    @property
+    def utilisation(self) -> float:
+        if self.capacity is None or self.capacity == 0:
+            return 0.0
+        return min(1.0, self.occupied / self.capacity)
+
+    @property
+    def surge_available(self) -> int:
+        """Beds that could still be activated"""
+        if self.max_capacity and self.capacity:
+            return self.max_capacity - self.capacity
+        return 0
+```
+
+**Step 2: React component renders scaling state**
+
+```
+Location: app/components/react_schematic/src/Schematic.tsx
+
+// Extended interface
+interface NodeData {
+  id: string;
+  label: string;
+  capacity: number | null;
+  baseline_capacity: number | null;  // NEW
+  max_capacity: number | null;       // NEW
+  surge_active: number;              // NEW
+  occupied: number;
+  // ... existing fields
+}
+
+// Render capacity bar with surge indicator
+const renderCapacityBar = (node: NodeData) => {
+  const baselineWidth = (node.baseline_capacity / node.max_capacity) * barWidth;
+  const surgeWidth = (node.surge_active / node.max_capacity) * barWidth;
+
+  return (
+    <g>
+      {/* Baseline capacity (solid) */}
+      <rect fill="#28a745" width={baselineWidth} />
+
+      {/* Surge capacity (hatched pattern) */}
+      <rect fill="url(#surgePattern)" x={baselineWidth} width={surgeWidth} />
+
+      {/* Available surge (ghost) */}
+      <rect fill="#e0e0e0" x={baselineWidth + surgeWidth}
+            width={barWidth - baselineWidth - surgeWidth} />
+    </g>
+  );
+};
+```
+
+**Step 3: Visual indicator for surge status**
+
+```
+Schematic Display Pattern:
+
+┌──────────────────────────────────┐
+│  ED Bays            [OPEL 3]    │  ← OPEL badge top-right
+├──────────────────────────────────┤
+│  ████████████░░░░  24/28        │  ← Baseline + Surge / Max
+│  ├── 20 ──┤├ +4 ┤               │  ← Visual breakdown
+│   baseline  surge               │
+├──────────────────────────────────┤
+│  Wait: 12 min                   │
+└──────────────────────────────────┘
+```
+
+### 1.5 Scale-Up Trigger Integration
+
+```
+Location: src/faer/core/scaling.py
+
+@dataclass
+class ScalingTrigger:
+    trigger_type: TriggerType
+    resource_id: str
+    threshold: float
+    sustain_minutes: float = 5.0    # Must hold for 5 min before firing
+
+@dataclass
+class ScalingAction:
+    action_type: ActionType         # ADD_CAPACITY, REMOVE_CAPACITY, etc.
+    target_resource: str
+    amount: int
+
+@dataclass
+class ScalingRule:
+    name: str
+    trigger: ScalingTrigger
+    action: ScalingAction
+    cooldown_minutes: float = 15.0  # Prevent oscillation
+    max_activations: int = 3        # Limit per simulation
+```
+
+**Example: Auto-generate OPEL 3 surge rule**
+
+```python
+def create_opel_rules(config: OPELConfig) -> List[ScalingRule]:
+    rules = []
+
+    # ED surge at OPEL 3
+    if config.opel_3_ed_surge_beds > 0:
+        rules.append(ScalingRule(
+            name="OPEL3_ED_Surge",
+            trigger=ScalingTrigger(
+                trigger_type=TriggerType.UTILIZATION_ABOVE,
+                resource_id="ed_bays",
+                threshold=0.90,
+                sustain_minutes=5.0
+            ),
+            action=ScalingAction(
+                action_type=ActionType.ADD_CAPACITY,
+                target_resource="ed_bays",
+                amount=config.opel_3_ed_surge_beds
+            ),
+            cooldown_minutes=30.0
+        ))
+
+    return rules
+```
+
+### 1.6 Graceful Scale-Down
+
+When pressure eases, capacity reduces **gracefully** (waits for beds to empty):
+
+```
+Location: src/faer/model/dynamic_resource.py
+
+def remove_capacity(self, amount: int, graceful: bool = True) -> int:
+    """
+    Remove capacity from the resource.
+
+    Args:
+        amount: Number of slots to remove
+        graceful: If True, wait for slots to be released before removing
+                  If False, only remove currently empty slots
+    """
+    if graceful:
+        # Mark slots for deactivation when patient leaves
+        self._pending_removals += amount
+    else:
+        # Only remove empty slots immediately
+        removable = self.current_capacity - self.occupied
+        actual_remove = min(amount, removable)
+        self.current_capacity -= actual_remove
+        return actual_remove
+```
+
+**Schematic should show pending removals**:
+```
+┌──────────────────────────────────┐
+│  Ward Beds                       │
+├──────────────────────────────────┤
+│  ████████████████░░  38/45      │
+│       ↓ scaling down to 30      │  ← Indicator for pending
+└──────────────────────────────────┘
+```
+
+---
+
+## Part 2: Bolt-On Departments (Horizontal Extension)
+
+New departments can be **attached modularly** without rewriting core simulation logic.
+
+### 2.1 Bolt-On Architecture Pattern
+
+```
+                    ┌─────────────┐
+                    │     ITU     │
+                    └──────┬──────┘
+                           │
+┌─────────┐  ┌─────────┐  ┌┴────────┐  ┌─────────┐  ┌──────────┐
+│ Arrivals├──┤ Triage  ├──┤ ED Bays ├──┤ Theatre ├──┤ Discharge│
+└─────────┘  └─────────┘  └┬────────┘  └─────────┘  └────┬─────┘
+                           │                              │
+                    ┌──────┴──────┐              ┌────────┴───────┐
+                    │    Ward     │              │ Discharge      │
+                    └─────────────┘              │ Lounge [BOLT]  │
+                                                 └────────────────┘
+```
+
+**Bolt-on characteristics**:
+- Connects to existing nodes via edges
+- Has own configuration dataclass
+- Can be enabled/disabled independently
+- Doesn't break simulation if disabled
+
+### 2.2 Bolt-On Department Types
+
+| Type | Example | Connection Point | Purpose |
+|------|---------|------------------|---------|
+| **Holding Area** | Discharge Lounge | Exit pathway | Decouple bed from discharge |
+| **Diagnostic Pod** | CT Suite, MRI | ED Bays (parallel) | Specialist investigation |
+| **Satellite Unit** | Urgent Care Centre | Arrivals (parallel) | Offload minor cases |
+| **Step-Down Unit** | HDU | Between ITU & Ward | Intermediate care level |
+| **Overflow Wing** | Winter Ward | Ward (parallel) | Surge capacity pod |
+
+### 2.3 Implementing a Bolt-On: Discharge Lounge Example
+
+**Step 1: Configuration dataclass**
+
+```
+Location: src/faer/core/scenario.py
+
+@dataclass
+class DischargeLoungeConfig:
+    enabled: bool = False
+    capacity: int = 10
+    max_wait_mins: float = 120.0
+    position: Tuple[int, int] = (1200, 700)  # Schematic coordinates
+```
+
+**Step 2: Add to FullScenario**
+
+```python
+@dataclass
+class FullScenario:
+    # ... existing configs
+    discharge_lounge: DischargeLoungeConfig = field(
+        default_factory=DischargeLoungeConfig
+    )
+```
+
+**Step 3: SimPy resource creation (conditional)**
+
+```
+Location: src/faer/model/full_model.py
+
+def create_resources(env, scenario):
+    resources = AEResources(...)
+
+    # Bolt-on: Discharge Lounge
+    if scenario.discharge_lounge.enabled:
+        resources.discharge_lounge = simpy.Resource(
+            env,
+            capacity=scenario.discharge_lounge.capacity
+        )
+    else:
+        resources.discharge_lounge = None
+
+    return resources
+```
+
+**Step 4: Patient routing (conditional)**
+
+```python
+def patient_discharge_process(env, patient, resources, scenario):
+    # Standard pathway: leave ward/ITU bed
+    yield release_bed(patient.current_bed)
+
+    # Bolt-on pathway: use lounge if enabled
+    if resources.discharge_lounge is not None:
+        with resources.discharge_lounge.request() as req:
+            yield req
+            # Wait for transport/paperwork
+            yield env.timeout(sample_lounge_time())
+
+    # Depart system
+    record_departure(patient)
+```
+
+**Step 5: Schematic data builder (conditional node)**
+
+```
+Location: app/components/react_schematic/data.py
+
+def build_schematic_from_config(session_state) -> SchematicData:
+    nodes = {}
+    edges = []
+
+    # ... existing nodes
+
+    # Bolt-on: Discharge Lounge
+    if session_state.get("discharge_lounge_enabled", False):
+        nodes["discharge_lounge"] = NodeState(
+            id="discharge_lounge",
+            label="Discharge Lounge",
+            node_type="process",
+            capacity=session_state.get("discharge_lounge_capacity", 10),
+            baseline_capacity=session_state.get("discharge_lounge_capacity", 10),
+            max_capacity=session_state.get("discharge_lounge_capacity", 10),
+            surge_active=0,
             occupied=0,
             throughput_per_hour=0.0,
             mean_wait_mins=0.0
         )
 
-In build_schematic_from_results():
-    # Map simulation results to node state
-    # Calculate utilisation from results['util_new_dept']
+        # Edge from Ward to Lounge
+        edges.append(FlowEdge(
+            source="ward",
+            target="discharge_lounge",
+            volume_per_hour=0.0,
+            is_blocked=False
+        ))
+
+        # Edge from Lounge to Discharge
+        edges.append(FlowEdge(
+            source="discharge_lounge",
+            target="discharge",
+            volume_per_hour=0.0,
+            is_blocked=False
+        ))
 ```
 
-### Step 2.7: Add Flow Edges
-
-Define connections in data builder:
+**Step 6: React schematic (dynamic positioning)**
 
 ```
-Location: app/components/react_schematic/data.py
+Location: app/components/react_schematic/src/Schematic.tsx
 
-Add FlowEdge objects:
-edges.append(FlowEdge(
-    source="source_node_id",
-    target="new_dept",
-    volume_per_hour=calculated_flow,
-    is_blocked=util_new_dept > 0.95
-))
+// Read positions from data, not hardcoded
+const getNodePosition = (nodeId: string, nodeData: NodeData) => {
+  // First check if position provided in data
+  if (nodeData.position) {
+    return nodeData.position;
+  }
+
+  // Fall back to defaults for known nodes
+  const defaults: Record<string, {x: number, y: number}> = {
+    ed_bays: { x: 660, y: 500 },
+    ward: { x: 930, y: 770 },
+    // ... etc
+  };
+
+  return defaults[nodeId] || { x: 100, y: 100 };
+};
+```
+
+### 2.4 Bolt-On: Step-Down Unit (HDU)
+
+Pattern for intermediate care between ITU and Ward:
+
+```
+                    ┌─────────────┐
+                    │     ITU     │
+                    └──────┬──────┘
+                           │
+                    ┌──────┴──────┐
+                    │    HDU      │  ← NEW BOLT-ON
+                    │ (Step-Down) │
+                    └──────┬──────┘
+                           │
+                    ┌──────┴──────┐
+                    │    Ward     │
+                    └─────────────┘
+```
+
+**Configuration**:
+
+```python
+@dataclass
+class HDUConfig:
+    enabled: bool = False
+    capacity: int = 4
+    los_mean_hours: float = 24.0
+    los_cv: float = 0.6
+    from_itu_prob: float = 0.85      # ITU patients stepping down
+    direct_to_ward_prob: float = 0.90 # HDU patients going to ward
+    direct_discharge_prob: float = 0.10
+    position: Tuple[int, int] = (930, 500)  # Between ITU and Ward
+```
+
+**Routing modification**:
+
+```python
+# Before bolt-on:
+RoutingRule("itu", "ward", probability=0.85)
+RoutingRule("itu", "discharge", probability=0.05)
+
+# After bolt-on (when HDU enabled):
+RoutingRule("itu", "hdu", probability=0.85)      # Step-down to HDU
+RoutingRule("itu", "discharge", probability=0.05)
+RoutingRule("hdu", "ward", probability=0.90)     # HDU to Ward
+RoutingRule("hdu", "discharge", probability=0.10)
+```
+
+### 2.5 Bolt-On: Diagnostic Pod
+
+Parallel pathway for specialist investigations:
+
+```
+                              ┌─────────────┐
+                         ┌────┤  CT Suite   │
+                         │    └──────┬──────┘
+┌─────────┐  ┌─────────┐ │           │
+│ Triage  ├──┤ ED Bays ├─┼───────────┼────► Continue flow
+└─────────┘  └─────────┘ │           │
+                         │    ┌──────┴──────┐
+                         └────┤   X-Ray     │
+                              └─────────────┘
+```
+
+**Key difference**: Patients visit diagnostic pod and **return** to ED bay (not a one-way flow).
+
+```python
+@dataclass
+class DiagnosticPodConfig:
+    enabled: bool = False
+    capacity: int = 2
+    scan_time_mean: float = 15.0  # minutes
+    scan_time_cv: float = 0.3
+    position: Tuple[int, int] = (660, 300)  # Above ED
+
+    # Usage probability by priority
+    usage_by_priority: Dict[int, float] = field(default_factory=lambda: {
+        1: 0.80,  # P1 patients 80% need CT
+        2: 0.50,
+        3: 0.20,
+        4: 0.05,
+    })
+```
+
+**Schematic edge pattern** (bidirectional):
+
+```python
+edges.append(FlowEdge("ed_bays", "ct_suite", volume_per_hour=2.0))
+edges.append(FlowEdge("ct_suite", "ed_bays", volume_per_hour=2.0))  # Return path
+```
+
+### 2.6 Bolt-On: Satellite Urgent Care Centre
+
+Arrival-parallel pathway to offload minor cases:
+
+```
+┌─────────────┐
+│  Ambulance  ├──┐
+└─────────────┘  │
+                 │    ┌─────────┐    ┌─────────────┐
+┌─────────────┐  ├────┤ Triage  ├────┤   ED Bays   │
+│   Walk-in   ├──┤    └─────────┘    └─────────────┘
+└─────────────┘  │
+                 │    ┌─────────────────────────┐
+                 └────┤  Urgent Care Centre    │──► Minor discharge
+                      │  [BOLT-ON SATELLITE]   │
+                      └─────────────────────────┘
+```
+
+**Diversion logic**:
+
+```python
+@dataclass
+class UCCConfig:
+    enabled: bool = False
+    capacity: int = 8
+    assessment_time_mean: float = 15.0
+
+    # Diversion criteria
+    accept_priorities: List[int] = field(default_factory=lambda: [3, 4])
+    accept_arrival_modes: List[str] = field(default_factory=lambda: ["walkin"])
+    diversion_rate: float = 0.30  # 30% of eligible patients diverted
 ```
 
 ---
 
-## Part 3: Modular Department Registry Pattern
+## Part 3: Schematic Layout Expansion Strategies
 
-For maximum flexibility, implement a registry pattern:
+As departments grow and bolt-on, the schematic must adapt.
 
-### Step 3.1: Department Registry
-
-Create a central department definition:
+### 3.1 Layout Zones
 
 ```
-Suggested location: src/faer/core/departments.py
+┌─────────────────────────────────────────────────────────────────────┐
+│                           UPSTREAM ZONE                             │
+│                    (Diagnostics, Specialty Consults)                │
+│                           Y: 200-400                                │
+├─────────────────────────────────────────────────────────────────────┤
+│                           MAIN LANE                                 │
+│              Entry → Triage → ED → Theatre → Exit                   │
+│                           Y: 500                                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                         DOWNSTREAM ZONE                             │
+│                    (Ward, Step-Down, Discharge)                     │
+│                           Y: 600-800                                │
+├─────────────────────────────────────────────────────────────────────┤
+│                          SATELLITE ZONE                             │
+│                    (UCC, Overflow, External)                        │
+│                           Y: 900+                                   │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-Pattern:
+### 3.2 Dynamic Position Calculation
+
+```
+Location: app/components/react_schematic/data.py
+
+def calculate_node_positions(nodes: Dict[str, NodeState]) -> Dict[str, Tuple[int, int]]:
+    """Auto-calculate positions based on node categories"""
+
+    positions = {}
+
+    # Group nodes by category
+    entry_nodes = [n for n in nodes.values() if n.node_type == "entry"]
+    process_nodes = [n for n in nodes.values() if n.node_type == "process"]
+    resource_nodes = [n for n in nodes.values() if n.node_type == "resource"]
+    exit_nodes = [n for n in nodes.values() if n.node_type == "exit"]
+
+    # Entry column (X = 120)
+    for i, node in enumerate(entry_nodes):
+        positions[node.id] = (120, 380 + i * 120)
+
+    # Main lane resources (X increments of 270)
+    main_lane = ["triage", "ed_bays", "theatre"]
+    for i, node_id in enumerate(main_lane):
+        if node_id in nodes:
+            positions[node_id] = (390 + i * 270, 500)
+
+    # Upstream (Y = 230)
+    upstream = ["itu", "ct_suite", "xray"]
+    for i, node_id in enumerate(upstream):
+        if node_id in nodes:
+            positions[node_id] = (660 + i * 200, 230)
+
+    # Downstream (Y = 770)
+    downstream = ["ward", "hdu", "discharge_lounge"]
+    for i, node_id in enumerate(downstream):
+        if node_id in nodes:
+            positions[node_id] = (660 + i * 200, 770)
+
+    # Exit (X = 1200)
+    positions["discharge"] = (1200, 500)
+
+    return positions
+```
+
+### 3.3 Viewport Scaling
+
+As nodes increase, expand the viewBox:
+
+```typescript
+// Schematic.tsx
+const calculateViewBox = (nodeCount: number): string => {
+  const baseWidth = 1400;
+  const baseHeight = 1000;
+
+  // Expand for additional nodes
+  const extraWidth = Math.max(0, (nodeCount - 10) * 150);
+  const extraHeight = Math.max(0, (nodeCount - 10) * 100);
+
+  return `0 0 ${baseWidth + extraWidth} ${baseHeight + extraHeight}`;
+};
+```
+
+---
+
+## Part 4: Modular Department Registry
+
+For maximum flexibility, maintain a central registry of all possible departments.
+
+### 4.1 Registry Definition
+
+```
+Location: src/faer/core/departments.py (NEW FILE)
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Optional
+from enum import Enum
+
+class DepartmentCategory(Enum):
+    ENTRY = "entry"
+    TRIAGE = "triage"
+    EMERGENCY = "emergency"
+    DIAGNOSTIC = "diagnostic"
+    THEATRE = "theatre"
+    CRITICAL_CARE = "critical_care"
+    STEP_DOWN = "step_down"
+    WARD = "ward"
+    HOLDING = "holding"
+    EXIT = "exit"
+    SATELLITE = "satellite"
+
 @dataclass
 class DepartmentDefinition:
-    id: str                    # Unique identifier
-    label: str                 # Display name
-    node_type: str             # "resource" | "process" | "entry" | "exit"
-    category: str              # "emergency" | "downstream" | "diagnostics"
-    default_capacity: int
-    position: Tuple[int, int]  # (x, y) for schematic
-    color: str                 # Status color override (optional)
+    id: str
+    label: str
+    category: DepartmentCategory
+    node_type: str  # "entry" | "resource" | "process" | "exit"
 
+    # Capacity settings
+    default_capacity: int
+    min_capacity: int = 1
+    max_capacity: Optional[int] = None
+    supports_scaling: bool = False
+
+    # Position hints
+    zone: str = "main"  # "upstream" | "main" | "downstream" | "satellite"
+    lane_order: int = 0  # Ordering within zone
+
+    # Routing
+    default_sources: List[str] = field(default_factory=list)
+    default_targets: List[str] = field(default_factory=list)
+    is_bidirectional: bool = False  # For diagnostics
+
+    # Feature flags
+    is_bolt_on: bool = False
+    requires_config: bool = True
+
+# Central Registry
 DEPARTMENT_REGISTRY: Dict[str, DepartmentDefinition] = {
-    "ed_bays": DepartmentDefinition(
-        id="ed_bays",
-        label="ED Bays",
-        node_type="resource",
-        category="emergency",
-        default_capacity=12,
-        position=(660, 500),
-        color=None
+    # Entry points
+    "ambulance": DepartmentDefinition(
+        id="ambulance", label="Ambulance", category=DepartmentCategory.ENTRY,
+        node_type="entry", default_capacity=0, zone="entry", lane_order=0,
+        default_targets=["triage"], is_bolt_on=False, requires_config=False
     ),
+
+    # Core departments
+    "ed_bays": DepartmentDefinition(
+        id="ed_bays", label="ED Bays", category=DepartmentCategory.EMERGENCY,
+        node_type="resource", default_capacity=20, min_capacity=8, max_capacity=40,
+        supports_scaling=True, zone="main", lane_order=2,
+        default_sources=["triage"], default_targets=["theatre", "ward", "itu", "discharge"]
+    ),
+
+    # Bolt-ons
+    "discharge_lounge": DepartmentDefinition(
+        id="discharge_lounge", label="Discharge Lounge",
+        category=DepartmentCategory.HOLDING, node_type="process",
+        default_capacity=10, zone="downstream", lane_order=3,
+        default_sources=["ward", "itu"], default_targets=["discharge"],
+        is_bolt_on=True
+    ),
+
+    "hdu": DepartmentDefinition(
+        id="hdu", label="HDU (Step-Down)", category=DepartmentCategory.STEP_DOWN,
+        node_type="resource", default_capacity=4, max_capacity=8,
+        supports_scaling=True, zone="downstream", lane_order=1,
+        default_sources=["itu"], default_targets=["ward", "discharge"],
+        is_bolt_on=True
+    ),
+
+    "ct_suite": DepartmentDefinition(
+        id="ct_suite", label="CT Suite", category=DepartmentCategory.DIAGNOSTIC,
+        node_type="resource", default_capacity=2, zone="upstream", lane_order=0,
+        default_sources=["ed_bays"], default_targets=["ed_bays"],
+        is_bidirectional=True, is_bolt_on=True
+    ),
+
     # ... more departments
 }
 ```
 
-### Step 3.2: Dynamic Node Generation
-
-React component reads from registry:
+### 4.2 Registry-Driven UI Generation
 
 ```
-Location: app/components/react_schematic/src/Schematic.tsx
+Location: app/pages/2_Resources.py
 
-Instead of hardcoded NODE_POSITIONS:
-- Receive positions from Python via props
-- Iterate over nodes object to render
-- Use node.category for styling decisions
+from faer.core.departments import DEPARTMENT_REGISTRY, DepartmentCategory
+
+def render_department_config():
+    st.header("Department Configuration")
+
+    # Group by category
+    categories = {}
+    for dept_id, dept in DEPARTMENT_REGISTRY.items():
+        cat = dept.category.value
+        if cat not in categories:
+            categories[cat] = []
+        categories[cat].append(dept)
+
+    # Render each category
+    for cat_name, depts in categories.items():
+        with st.expander(f"{cat_name.replace('_', ' ').title()}", expanded=True):
+            for dept in depts:
+                col1, col2, col3 = st.columns([2, 1, 1])
+
+                with col1:
+                    st.write(f"**{dept.label}**")
+
+                with col2:
+                    if dept.is_bolt_on:
+                        enabled = st.checkbox(
+                            "Enable",
+                            key=f"{dept.id}_enabled",
+                            value=st.session_state.get(f"{dept.id}_enabled", False)
+                        )
+                    else:
+                        enabled = True
+
+                with col3:
+                    if enabled and dept.default_capacity > 0:
+                        capacity = st.number_input(
+                            "Capacity",
+                            min_value=dept.min_capacity,
+                            max_value=dept.max_capacity or 100,
+                            value=st.session_state.get(f"n_{dept.id}", dept.default_capacity),
+                            key=f"n_{dept.id}"
+                        )
 ```
 
-### Step 3.3: Routing Matrix
+### 4.3 Registry-Driven Schematic Building
 
-Define allowed transitions:
+```python
+def build_schematic_from_registry(
+    session_state,
+    results: Optional[Dict] = None
+) -> SchematicData:
+    nodes = {}
+    edges = []
 
-```
-Location: src/faer/core/scenario.py
+    # Build nodes from registry
+    for dept_id, dept in DEPARTMENT_REGISTRY.items():
+        # Skip disabled bolt-ons
+        if dept.is_bolt_on:
+            if not session_state.get(f"{dept_id}_enabled", False):
+                continue
 
-Pattern:
-@dataclass
-class RoutingRule:
-    source: str
-    target: str
-    probability: float
-    priority_filter: Optional[List[int]] = None  # P1-P4 filter
+        # Get capacity (from session_state or default)
+        capacity = session_state.get(f"n_{dept_id}", dept.default_capacity)
+        if dept.node_type == "entry" or dept.node_type == "exit":
+            capacity = None
 
-ROUTING_MATRIX: List[RoutingRule] = [
-    RoutingRule("triage", "ed_bays", 1.0),
-    RoutingRule("ed_bays", "ward", 0.40),
-    RoutingRule("ed_bays", "itu", 0.10),
-    # ...
-]
-```
+        # Get occupancy from results if available
+        occupied = 0
+        if results and f"occupied_{dept_id}" in results:
+            occupied = results[f"occupied_{dept_id}"]
 
----
+        nodes[dept_id] = NodeState(
+            id=dept_id,
+            label=dept.label,
+            node_type=dept.node_type,
+            capacity=capacity,
+            occupied=occupied,
+            # ... etc
+        )
 
-## Part 4: Visualization Customization
+    # Build edges from registry
+    for dept_id, dept in DEPARTMENT_REGISTRY.items():
+        if dept_id not in nodes:
+            continue
 
-### Step 4.1: Status Thresholds
+        for target_id in dept.default_targets:
+            if target_id in nodes:
+                edges.append(FlowEdge(
+                    source=dept_id,
+                    target=target_id,
+                    volume_per_hour=0.0,
+                    is_blocked=False
+                ))
 
-Make thresholds configurable:
-
-```
-Location: app/components/react_schematic/data.py
-
-Instead of hardcoded 0.70/0.90:
-
-@dataclass
-class StatusThresholds:
-    warning: float = 0.70
-    critical: float = 0.90
-    blocked: float = 0.95
-```
-
-### Step 4.2: Color Schemes
-
-Support multiple themes:
-
-```
-Location: app/components/react_schematic/src/Schematic.tsx
-
-const THEMES = {
-    default: {
-        normal: "#28a745",
-        warning: "#ffc107",
-        critical: "#dc3545",
-        entry: "#1976d2",
-        exit: "#7b1fa2"
-    },
-    accessible: {
-        // High contrast colors
-    }
-};
-```
-
-### Step 4.3: Layout Algorithms
-
-For auto-positioning new departments:
-
-```
-Layout Strategy Options:
-
-1. Fixed Grid: Predefined positions in registry
-2. Force-Directed: Auto-arrange based on connections
-3. Layered: Organize by category (entry → process → downstream → exit)
-4. Custom: User-defined coordinates in config
-
-Recommended: Start with Fixed Grid, migrate to Layered as departments grow
+    return SchematicData(
+        timestamp=datetime.now().isoformat(),
+        nodes=nodes,
+        edges=edges,
+        total_in_system=sum(n.occupied for n in nodes.values()),
+        total_throughput_24h=0,
+        overall_status="normal"
+    )
 ```
 
 ---
 
 ## Part 5: Integration Checklist
 
-When adding a new department, complete these steps:
+### Adding Surge Capacity to Existing Department
 
-### Python Side
-- [ ] Add NodeType enum value in `entities.py`
-- [ ] Create Config dataclass in `scenario.py`
-- [ ] Add to FullScenario dataclass
-- [ ] Update routing rules
-- [ ] Add to ResultsCollector metrics
-- [ ] Update `build_schematic_from_config()`
-- [ ] Update `build_schematic_from_results()`
-- [ ] Add FlowEdge connections
-- [ ] Update Streamlit Resources page
+- [ ] Update `CapacityScalingConfig` with surge bed count
+- [ ] Add to OPEL rule generation in `create_opel_rules()`
+- [ ] Extend `NodeState` with `baseline_capacity`, `max_capacity`, `surge_active`
+- [ ] Update React `renderCapacityBar()` for surge visualization
+- [ ] Update `build_schematic_from_results()` to include scaling state
+- [ ] Add scaling metrics to results collector
+- [ ] Test graceful scale-down behavior
 
-### React Side
-- [ ] Add position to NODE_POSITIONS
-- [ ] Add edge routing cases
-- [ ] Update legend if new node type
-- [ ] Test click interaction
-- [ ] Verify responsive scaling
+### Adding Bolt-On Department
 
-### Testing
-- [ ] Unit test for new config validation
-- [ ] Integration test for simulation flow
-- [ ] Visual regression test for schematic
-- [ ] Performance test with increased nodes
+- [ ] Create config dataclass (e.g., `HDUConfig`)
+- [ ] Add to `FullScenario` with `enabled: bool = False`
+- [ ] Add to `DEPARTMENT_REGISTRY`
+- [ ] Create SimPy resource conditionally in `create_resources()`
+- [ ] Add routing rules (conditional on enabled)
+- [ ] Update `build_schematic_from_config()` with conditional node
+- [ ] Add position to zone layout calculation
+- [ ] Update React edge routing for new connections
+- [ ] Add enable/disable toggle in Streamlit UI
+- [ ] Write tests for enabled and disabled states
 
 ---
 
-## Part 6: Code Patterns to Follow
+## Part 6: Quick Reference Tables
 
-### Pattern 1: Node State Creation
-```python
-NodeState(
-    id="unique_id",           # matches React NODE_POSITIONS key
-    label="Display Name",     # shown on schematic
-    node_type="resource",     # determines rendering style
-    capacity=10,              # None for entry/exit nodes
-    occupied=5,               # current patients
-    throughput_per_hour=2.5,  # for entry/exit display
-    mean_wait_mins=15.0       # shown below capacity
-)
-```
+### Scaling Triggers
 
-### Pattern 2: Flow Edge Creation
-```python
-FlowEdge(
-    source="source_node_id",
-    target="target_node_id",
-    volume_per_hour=3.5,      # shown as label if >= 2.0
-    is_blocked=False          # red dashed if True
-)
-```
+| Trigger Type | Use Case | Example Threshold |
+|-------------|----------|-------------------|
+| `UTILIZATION_ABOVE` | Activate surge | 0.90 (90%) |
+| `UTILIZATION_BELOW` | Deactivate surge | 0.70 (70%) |
+| `QUEUE_LENGTH_ABOVE` | Pressure indicator | 5 patients |
+| `TIME_OF_DAY` | Shift-based capacity | 08:00-20:00 |
 
-### Pattern 3: Utilisation Calculation
-```python
-@property
-def utilisation(self) -> float:
-    if self.capacity is None or self.capacity == 0:
-        return 0.0
-    return min(1.0, self.occupied / self.capacity)
-```
+### Scaling Actions
 
-### Pattern 4: Status Determination
-```python
-@property
-def status(self) -> str:
-    if self.utilisation >= 0.90:
-        return "critical"
-    elif self.utilisation >= 0.70:
-        return "warning"
-    return "normal"
-```
+| Action Type | Effect | Schematic Update |
+|------------|--------|------------------|
+| `ADD_CAPACITY` | Activate surge beds | Surge bar extends |
+| `REMOVE_CAPACITY` | Deactivate when empty | Surge bar shrinks |
+| `ACCELERATE_DISCHARGE` | Reduce LoS | Badge on exit node |
+| `ACTIVATE_DISCHARGE_LOUNGE` | Enable bolt-on | Node appears |
+| `DIVERT_ARRIVALS` | Redirect to satellite | Entry edge redirects |
 
----
+### Bolt-On Categories
 
-## Part 7: Common Pitfalls to Avoid
-
-1. **Mismatched IDs**: Node `id` in Python must match key in React `NODE_POSITIONS`
-
-2. **Missing Edges**: Every node needs at least one incoming or outgoing edge
-
-3. **Overlapping Positions**: Check X/Y coordinates don't collide
-
-4. **Capacity vs Throughput**:
-   - Resource nodes: use `capacity` (integer)
-   - Entry/Exit nodes: use `throughput_per_hour` (float), set `capacity=None`
-
-5. **Session State Keys**: Use consistent naming: `st.session_state.n_<dept>_beds`
-
-6. **TypeScript Types**: Update `NodeData` interface if adding new fields
-
-7. **Routing Loops**: Ensure routing probabilities sum to ≤ 1.0
-
-8. **Build Step**: After React changes, run `npm run build` in `app/components/react_schematic/`
-
----
-
-## Part 8: Future Expansion Ideas
-
-### 8.1 Multi-Building Support
-- Add `building: str` field to NodeState
-- Group nodes by building in layout
-- Add building selector in UI
-
-### 8.2 Time-Based Visualization
-- Animate schematic over simulation time
-- Slider to scrub through timeline
-- Heatmap overlay for historical utilisation
-
-### 8.3 Scenario Comparison
-- Side-by-side schematics (use MiniSchematic)
-- Diff view highlighting changed capacities
-- A/B testing visualization
-
-### 8.4 Real-Time Integration
-- WebSocket for live updates
-- Connect to hospital information systems
-- Dashboard mode with auto-refresh
-
-### 8.5 Configuration Import/Export
-- JSON schema for department definitions
-- Import hospital configs from file
-- Share configurations between instances
-
----
-
-## Quick Reference: File Modifications by Task
-
-| Task | Files to Modify |
-|------|----------------|
-| Add beds to existing dept | `scenario.py`, `2_Resources.py`, `data.py` |
-| Add new department | `entities.py`, `scenario.py`, `data.py`, `Schematic.tsx`, `2_Resources.py` |
-| Change routing | `scenario.py`, `data.py` (edges) |
-| Change layout | `Schematic.tsx` (NODE_POSITIONS) |
-| Change colors | `Schematic.tsx` (getStatusColor, CSS) |
-| Add metrics | `entities.py`, `collector.py`, `data.py` |
+| Category | Zone | Visual Pattern |
+|----------|------|----------------|
+| Diagnostic | Upstream | Bidirectional edges |
+| Step-Down | Between critical & ward | Vertical in crucifix |
+| Holding | Near exit | Precedes discharge |
+| Satellite | Below main | Parallel entry path |
+| Overflow | Parallel to ward | Same Y as parent |
 
 ---
 
@@ -490,15 +952,16 @@ cd app/components/react_schematic && npm run build
 # Run Streamlit app
 streamlit run app/Home.py
 
-# Run tests
-pytest tests/ -v
+# Run tests (including scaling tests)
+pytest tests/test_scaling_integration.py -v
+pytest tests/test_dynamic_resource.py -v
 
-# Type checking (if configured)
-mypy src/faer/
+# Run all tests
+pytest tests/ -v
 ```
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 2.0*
 *Last Updated: January 2026*
 *For: Claude Code in Cursor - FAER-M Integration*
